@@ -3508,6 +3508,203 @@ void main() {
       expect(cleared, isNull);
     });
   });
+
+  group('Fix 32: Comprehensive End-to-End System Verification', () {
+    test('End-to-End Campaign Lifecycle: Tactics, Contracts, Market, Events & Competitions', () async {
+      final prefs = PrefsService.instance;
+      await prefs.clearCareerConfig();
+
+      // 1. Tactical Setup & Custom Formation Persistence
+      final formation = TacticalFormation.getById('4-3-3');
+      expect(formation.slots.length, 11);
+      final customSlots = List<PitchSlot>.from(formation.slots);
+      // Adjust CAM higher into second striker
+      customSlots[6] = PitchSlot.clampSlot(6, 0.50, 0.32);
+      expect(formation.isCustomized(customSlots), isTrue);
+      expect(customSlots[6].defaultRole, 'CAM');
+
+      final customSlotsMap = {
+        '4-3-3': customSlots.map((s) => s.toJson()).toList(),
+      };
+
+      // 2. Initial Squad & Contracts Setup
+      final squadContracts = {
+        'Bukayo Saka': 4,
+        'Martin Odegaard': 3,
+        'Declan Rice': 3,
+        'William Saliba': 2,
+        'Gabriel Magalhaes': 2,
+        'Kai Havertz': 2,
+        'Gabriel Martinelli': 1, // Expiring
+        'Thomas Partey': 1,      // Expiring
+        'Jorginho': 1,           // Expiring
+        'David Raya': 3,
+        'Neto': 1,               // Bench GK
+      };
+
+      await prefs.saveCareerConfig(
+        leagueId: 'premier_league',
+        clubName: 'Arsenal',
+        clubCode: 'ARS',
+        isCustomClub: false,
+        squadMode: 'current',
+        budget: 90.0,
+        formationId: '4-3-3',
+        playerContracts: squadContracts,
+        customFormationSlots: customSlotsMap,
+      );
+
+      final loadedState = await prefs.getCareerConfig();
+      expect(loadedState, isNotNull);
+      expect(loadedState!['clubName'], 'Arsenal');
+      expect(loadedState['budget'], 90.0);
+      expect(loadedState['formationId'], '4-3-3');
+      expect(loadedState['customFormationSlots'], isNotNull);
+      expect(loadedState['playerContracts'], isNotNull);
+
+      // 3. Transfer Market & Free Agent Valuations
+      const baseVal = 100.0;
+      final standardFee = TransferMarketService.calculateEffectiveTransferFee(
+        baseValuation: baseVal,
+        contractStatus: ContractStatus.fromSeasons(3),
+      );
+      expect(standardFee, 100.0);
+
+      final freeAgentFee = TransferMarketService.calculateEffectiveTransferFee(
+        baseValuation: baseVal,
+        contractStatus: ContractStatus.fromSeasons(0),
+      );
+      expect(freeAgentFee, 0.0);
+
+      final expiringFee = TransferMarketService.calculateEffectiveTransferFee(
+        baseValuation: baseVal,
+        contractStatus: ContractStatus.fromSeasons(1),
+      );
+      expect(expiringFee, 50.0);
+
+      // 4. Inbound AI Transfer Bids
+      final inboundBids = TransferOfferService.evaluateMatchdayInboundBids(
+        userSquad: [
+          Player.fromMap({
+            'player_name': 'Kylian Mbappe',
+            'overall': 91,
+            'age': 25.0,
+            'primary_position': 'ST',
+            'mode': 'FC24',
+            'season': 2024,
+            'team_name': 'Arsenal',
+          }),
+        ],
+        userClub: 'Arsenal',
+        season: 1,
+        gameweek: 2,
+        isWindowOpen: true,
+        currentPendingOffers: [],
+        valuationCalculator: (p) => 120.0,
+      );
+      expect(inboundBids, isA<List<TransferOffer>>());
+
+      // 5. Squad Events & Auto-Replacement
+      final injuryEvent = SquadEvent(
+        id: 'inj_1',
+        playerName: 'Martin Odegaard',
+        type: SquadEventType.injury,
+        title: 'Hamstring Injury',
+        description: 'Suffered during training',
+        durationGameweeks: 3,
+        remainingGameweeks: 3,
+        startGameweek: 1,
+        startSeason: 1,
+        severity: 'Moderate',
+        date: DateTime.now(),
+      );
+      expect(SquadEventService.isPlayerAvailable('Martin Odegaard', [injuryEvent]), isFalse);
+      expect(SquadEventService.isPlayerAvailable('Bukayo Saka', [injuryEvent]), isTrue);
+
+      Player makePlayer(String name, String pos, int ovr) {
+        return Player(
+          mode: 'current',
+          squadId: 'squad_test',
+          teamCode: 'ARS',
+          teamName: 'Arsenal',
+          season: 2024,
+          playerId: 'p_$name',
+          name: name,
+          overall: ovr,
+          displayPosition: pos,
+          primaryPosition: pos,
+          allPositions: pos,
+          isGoalkeeper: pos == 'GK',
+          age: 25.0,
+          potential: ovr.toDouble() + 3.0,
+          pace: 75,
+          shooting: 75,
+          passing: 75,
+          dribbling: 75,
+          defending: 75,
+          physicality: 75,
+        );
+      }
+
+      final testStarters = [
+        makePlayer('David Raya', 'GK', 84),
+        makePlayer('Ben White', 'RB', 82),
+        makePlayer('William Saliba', 'CB', 87),
+        makePlayer('Gabriel Magalhaes', 'CB', 86),
+        makePlayer('Jurrien Timber', 'LB', 81),
+        makePlayer('Declan Rice', 'CDM', 87),
+        makePlayer('Martin Odegaard', 'CAM', 89),
+        makePlayer('Mikel Merino', 'CM', 83),
+        makePlayer('Bukayo Saka', 'RW', 87),
+        makePlayer('Kai Havertz', 'ST', 83),
+        makePlayer('Gabriel Martinelli', 'LW', 84),
+        // Bench
+        makePlayer('Neto', 'GK', 78),
+        makePlayer('Leandro Trossard', 'LW', 82),
+        makePlayer('Ethan Nwaneri', 'CAM', 76),
+      ];
+
+      final adjustedSquad = SquadEventService.autoReplaceUnavailableStarters(
+        squad: testStarters,
+        activeEvents: [injuryEvent],
+      );
+      // Odegaard is displaced from starters
+      final startingNames = adjustedSquad.take(11).map((p) => p.name).toList();
+      expect(startingNames.contains('Martin Odegaard'), isFalse);
+      expect(startingNames.contains('Ethan Nwaneri') || startingNames.contains('Leandro Trossard'), isTrue);
+
+      // 6. Domestic Cups & UCL Tournament Progress
+      final ucl = UclTournament.create(userClub: 'Arsenal');
+      expect(ucl.participants.contains('Arsenal'), isTrue);
+      final faCup = CupTournament.create(id: 'fa_cup', userClub: 'Arsenal', poolClubs: CupTournament.kDefaultEnglishCupClubs);
+      expect(faCup.fixtures.length, 8); // Round of 16
+
+      // 7. Season Rollover & Contract Safeguards
+      final squadWithExpiring = [
+        ...testStarters,
+        makePlayer('Thomas Partey', 'CM', 82),
+        makePlayer('Jorginho', 'CM', 81),
+      ];
+      final expiringContracts = {
+        'Bukayo Saka': 4,
+        'Martin Odegaard': 3,
+        'Thomas Partey': 1, // 1 year left -> expires to 0!
+        'Jorginho': 1,      // 1 year left -> expires to 0!
+      };
+      final expiryResult = TransferMarketService.processSeasonContractExpiry(
+        squad: squadWithExpiring,
+        contracts: expiringContracts,
+      );
+      expect(expiryResult.departedPlayers.length, 2);
+      expect(expiryResult.departedPlayers.map((p) => p.name), contains('Thomas Partey'));
+      expect(expiryResult.departedPlayers.map((p) => p.name), contains('Jorginho'));
+      expect(expiryResult.remainingSquad.length, greaterThanOrEqualTo(11));
+      expect(expiryResult.remainingSquad.any((p) => p.isGoalkeeper || p.primaryPosition == 'GK'), isTrue);
+
+      await prefs.clearCareerConfig();
+    });
+  });
 }
+
 
 
