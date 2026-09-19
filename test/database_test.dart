@@ -112,5 +112,69 @@ void main() {
       final cr7Row = results.firstWhere((r) => r['player_name'] == 'Cristiano Ronaldo');
       expect(cr7Row['overall'], greaterThanOrEqualTo(94), reason: 'Peak OVR should be preserved in deduplicated row');
     });
+
+    test('Fix 33: Multi-edition players strictly return peak ratings (Saka, Palmer, Saliba, Gordon)', () async {
+      // Test 1: Bukayo Saka must return peak rating 88 (FC 27), never FIFA 20's 65 rating
+      final sakaRows = await db.rawQuery('''
+        SELECT player_name, overall, season
+        FROM players
+        WHERE player_name = 'Bukayo Saka'
+        ORDER BY overall DESC, season DESC
+      ''');
+      expect(sakaRows.isNotEmpty, isTrue);
+      expect(sakaRows.first['overall'], 88, reason: 'Bukayo Saka peak rating must be 88');
+      expect(sakaRows.first['season'], 2027, reason: 'Bukayo Saka latest season must be FC 27');
+
+      // Test 2: Cole Palmer must return peak rating 87 (FC 27), never 64
+      final palmerRows = await db.rawQuery('''
+        SELECT player_name, overall, season
+        FROM players
+        WHERE player_name = 'Cole Palmer'
+        ORDER BY overall DESC, season DESC
+      ''');
+      expect(palmerRows.isNotEmpty, isTrue);
+      expect(palmerRows.first['overall'], 87, reason: 'Cole Palmer peak rating must be 87');
+
+      // Test 3: William Saliba must return peak rating 89 (FC 27), never 74
+      final salibaRows = await db.rawQuery('''
+        SELECT player_name, overall, season
+        FROM players
+        WHERE player_name = 'William Saliba'
+        ORDER BY overall DESC, season DESC
+      ''');
+      expect(salibaRows.isNotEmpty, isTrue);
+      expect(salibaRows.first['overall'], 89, reason: 'William Saliba peak rating must be 89');
+
+      // Test 4: Anthony Gordon must return peak rating 85, never 67
+      final gordonRows = await db.rawQuery('''
+        SELECT player_name, overall, season
+        FROM players
+        WHERE player_name = 'A. Gordon'
+        ORDER BY overall DESC, season DESC
+      ''');
+      expect(gordonRows.isNotEmpty, isTrue);
+      expect(gordonRows.first['overall'], 85, reason: 'A. Gordon peak rating must be 85');
+
+      // Test 5: Simulating career squad load for multi-edition players with Dart putIfAbsent
+      final targetNames = ['Bukayo Saka', 'Cole Palmer', 'William Saliba', 'Phil Foden'];
+      final placeholders = List.filled(targetNames.length, '?').join(',');
+      final squadRows = await db.rawQuery('''
+        SELECT player_name, overall, season
+        FROM players
+        WHERE player_name IN ($placeholders)
+        ORDER BY overall DESC, season DESC
+      ''', targetNames);
+
+      final Map<String, Map<String, dynamic>> byName = {};
+      for (final r in squadRows) {
+        final name = (r['player_name'] as String).trim().toLowerCase();
+        byName.putIfAbsent(name, () => r);
+      }
+
+      expect(byName['bukayo saka']!['overall'], 88);
+      expect(byName['cole palmer']!['overall'], 87);
+      expect(byName['william saliba']!['overall'], 89);
+      expect(byName['phil foden']!['overall'], greaterThanOrEqualTo(86));
+    });
   });
 }

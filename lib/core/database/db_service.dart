@@ -89,12 +89,19 @@ class DatabaseService {
         FROM players p
         JOIN players_fts fts ON p.rowid = fts.rowid
         WHERE players_fts MATCH ?
-        GROUP BY p.player_name
-        ORDER BY MAX(p.overall) DESC
-        LIMIT ?
-      ''', [ftsExpression, limit]);
+        ORDER BY p.overall DESC, p.season DESC
+      ''', [ftsExpression]);
 
-      return results.map((row) => Player.fromMap(row)).toList();
+      final seen = <String>{};
+      final loaded = <Player>[];
+      for (final row in results) {
+        final p = Player.fromMap(row);
+        if (seen.add(p.name.trim().toLowerCase())) {
+          loaded.add(p);
+          if (loaded.length == limit) break;
+        }
+      }
+      return loaded;
     } catch (e) {
       debugPrint('FTS search fallback on error: $e');
       // Fallback to LIKE if FTS expression has syntax quirk
@@ -102,12 +109,19 @@ class DatabaseService {
       final fallbackResults = await db.rawQuery('''
         SELECT * FROM players
         WHERE player_name LIKE ? OR team_name LIKE ?
-        GROUP BY player_name
-        ORDER BY MAX(overall) DESC
-        LIMIT ?
-      ''', [likePattern, likePattern, limit]);
+        ORDER BY overall DESC, season DESC
+      ''', [likePattern, likePattern]);
 
-      return fallbackResults.map((row) => Player.fromMap(row)).toList();
+      final seen = <String>{};
+      final loaded = <Player>[];
+      for (final row in fallbackResults) {
+        final p = Player.fromMap(row);
+        if (seen.add(p.name.trim().toLowerCase())) {
+          loaded.add(p);
+          if (loaded.length == limit) break;
+        }
+      }
+      return loaded;
     }
   }
 
@@ -116,12 +130,19 @@ class DatabaseService {
     final db = await database;
     final results = await db.rawQuery('''
       SELECT * FROM players
-      GROUP BY player_name
-      ORDER BY MAX(overall) DESC
-      LIMIT ?
-    ''', [limit]);
+      ORDER BY overall DESC, season DESC
+    ''');
 
-    return results.map((row) => Player.fromMap(row)).toList();
+    final seen = <String>{};
+    final loaded = <Player>[];
+    for (final row in results) {
+      final p = Player.fromMap(row);
+      if (seen.add(p.name.trim().toLowerCase())) {
+        loaded.add(p);
+        if (loaded.length == limit) break;
+      }
+    }
+    return loaded;
   }
 
   /// Get a single player by ID
@@ -131,6 +152,7 @@ class DatabaseService {
       'players',
       where: 'player_id = ?',
       whereArgs: [id],
+      orderBy: 'overall DESC, season DESC',
       limit: 1,
     );
     if (results.isEmpty) return null;

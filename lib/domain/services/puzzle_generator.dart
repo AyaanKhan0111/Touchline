@@ -254,11 +254,18 @@ class PuzzleGenerator {
       SELECT * FROM players p
       WHERE p.player_name IN (SELECT player_name FROM players WHERE ${row.sqlCondition})
         AND p.player_name IN (SELECT player_name FROM players WHERE ${col.sqlCondition})
-      GROUP BY p.player_name
-      ORDER BY MAX(p.overall) DESC
+      ORDER BY p.overall DESC, p.season DESC
     ''', [...row.sqlArgs, ...col.sqlArgs]);
 
-    return result.map((r) => Player.fromMap(r)).toList();
+    final seen = <String>{};
+    final validPlayers = <Player>[];
+    for (final r in result) {
+      final p = Player.fromMap(r);
+      if (seen.add(p.name.trim().toLowerCase())) {
+        validPlayers.add(p);
+      }
+    }
+    return validPlayers;
   }
 
   static GridPuzzle _buildFallbackGrid() {

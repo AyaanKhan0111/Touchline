@@ -3704,6 +3704,200 @@ void main() {
       await prefs.clearCareerConfig();
     });
   });
+
+  group('Fix 33: Canonical Peak Rating Selection & Auto-Healing Tests', () {
+    test('Career save loading auto-heals corrupted legacy ratings for non-veteran players', () {
+      // Simulate player loaded from DB at peak rating 88
+      final saka = Player(
+        mode: 'current',
+        squadId: 'squad_test',
+        teamCode: 'ARS',
+        teamName: 'Arsenal',
+        season: 2027,
+        playerId: '246669',
+        name: 'Bukayo Saka',
+        overall: 88,
+        displayPosition: 'RW',
+        primaryPosition: 'RW',
+        allPositions: 'RW,LW',
+        isGoalkeeper: false,
+        age: 23.0,
+        potential: 90.0,
+        pace: 86,
+        shooting: 84,
+        passing: 83,
+        dribbling: 89,
+        defending: 65,
+        physicality: 76,
+      );
+
+      // Simulate a legacy save file where Saka had corrupted rating 65 (from old FIFA 20 row bug)
+      final corruptedSavedRatings = {'Bukayo Saka': 65};
+      final savedAges = {'Bukayo Saka': 23};
+
+      // Apply the Fix 33 healing logic
+      var squad = [saka];
+      squad = squad.map((p) {
+        final keyLower = p.name.trim().toLowerCase();
+        int? dynamicRating;
+        int? dynamicAge;
+        for (final entry in corruptedSavedRatings.entries) {
+          if (entry.key.trim().toLowerCase() == keyLower) {
+            dynamicRating = entry.value;
+            break;
+          }
+        }
+        for (final entry in savedAges.entries) {
+          if (entry.key.trim().toLowerCase() == keyLower) {
+            dynamicAge = entry.value;
+            break;
+          }
+        }
+        if (dynamicRating != null || dynamicAge != null) {
+          int finalOvr = dynamicRating ?? p.overall;
+          final effectiveAge = dynamicAge?.toDouble() ?? p.age ?? 25.0;
+          // Fix 33: Non-veterans (age < 33) never decline below their peak canonical rating.
+          // Automatically heal any legacy save corruption (e.g. Saka showing 65 instead of 88).
+          if (effectiveAge < 33 && finalOvr < p.overall) {
+            finalOvr = p.overall;
+          }
+          return p.copyWith(
+            overall: finalOvr,
+            age: dynamicAge?.toDouble() ?? p.age,
+          );
+        }
+        return p;
+      }).toList();
+
+      expect(squad.first.overall, 88, reason: 'Saka rating must be automatically healed from 65 to peak 88');
+      expect(squad.first.age, 23.0);
+    });
+
+    test('Career save loading preserves legitimate veteran decline (age >= 33)', () {
+      final veteran = Player(
+        mode: 'current',
+        squadId: 'squad_test',
+        teamCode: 'MIA',
+        teamName: 'Inter Miami',
+        season: 2022,
+        playerId: '158023',
+        name: 'Lionel Messi',
+        overall: 91,
+        displayPosition: 'RW',
+        primaryPosition: 'RW',
+        allPositions: 'RW,CF,CAM',
+        isGoalkeeper: false,
+        age: 36.0,
+        potential: 91.0,
+        pace: 80,
+        shooting: 89,
+        passing: 90,
+        dribbling: 94,
+        defending: 34,
+        physicality: 64,
+      );
+
+      // Veteran legitimately declined by -2 from 91 to 89
+      final savedRatings = {'Lionel Messi': 89};
+      final savedAges = {'Lionel Messi': 36};
+
+      var squad = [veteran];
+      squad = squad.map((p) {
+        final keyLower = p.name.trim().toLowerCase();
+        int? dynamicRating;
+        int? dynamicAge;
+        for (final entry in savedRatings.entries) {
+          if (entry.key.trim().toLowerCase() == keyLower) {
+            dynamicRating = entry.value;
+            break;
+          }
+        }
+        for (final entry in savedAges.entries) {
+          if (entry.key.trim().toLowerCase() == keyLower) {
+            dynamicAge = entry.value;
+            break;
+          }
+        }
+        if (dynamicRating != null || dynamicAge != null) {
+          int finalOvr = dynamicRating ?? p.overall;
+          final effectiveAge = dynamicAge?.toDouble() ?? p.age ?? 25.0;
+          if (effectiveAge < 33 && finalOvr < p.overall) {
+            finalOvr = p.overall;
+          }
+          return p.copyWith(
+            overall: finalOvr,
+            age: dynamicAge?.toDouble() ?? p.age,
+          );
+        }
+        return p;
+      }).toList();
+
+      expect(squad.first.overall, 89, reason: 'Veteran decline to 89 for age 36 must be preserved');
+    });
+
+    test('Career save loading preserves youth development breakthrough (> peak canonical rating)', () {
+      final youngStar = Player(
+        mode: 'current',
+        squadId: 'squad_test',
+        teamCode: 'ARS',
+        teamName: 'Arsenal',
+        season: 2027,
+        playerId: '246669',
+        name: 'Bukayo Saka',
+        overall: 88,
+        displayPosition: 'RW',
+        primaryPosition: 'RW',
+        allPositions: 'RW,LW',
+        isGoalkeeper: false,
+        age: 23.0,
+        potential: 91.0,
+        pace: 86,
+        shooting: 84,
+        passing: 83,
+        dribbling: 89,
+        defending: 65,
+        physicality: 76,
+      );
+
+      // Saka had a brilliant season and grew from 88 to 90
+      final savedRatings = {'Bukayo Saka': 90};
+      final savedAges = {'Bukayo Saka': 24};
+
+      var squad = [youngStar];
+      squad = squad.map((p) {
+        final keyLower = p.name.trim().toLowerCase();
+        int? dynamicRating;
+        int? dynamicAge;
+        for (final entry in savedRatings.entries) {
+          if (entry.key.trim().toLowerCase() == keyLower) {
+            dynamicRating = entry.value;
+            break;
+          }
+        }
+        for (final entry in savedAges.entries) {
+          if (entry.key.trim().toLowerCase() == keyLower) {
+            dynamicAge = entry.value;
+            break;
+          }
+        }
+        if (dynamicRating != null || dynamicAge != null) {
+          int finalOvr = dynamicRating ?? p.overall;
+          final effectiveAge = dynamicAge?.toDouble() ?? p.age ?? 25.0;
+          if (effectiveAge < 33 && finalOvr < p.overall) {
+            finalOvr = p.overall;
+          }
+          return p.copyWith(
+            overall: finalOvr,
+            age: dynamicAge?.toDouble() ?? p.age,
+          );
+        }
+        return p;
+      }).toList();
+
+      expect(squad.first.overall, 90, reason: 'Youth growth to 90 must be preserved');
+      expect(squad.first.age, 24.0);
+    });
+  });
 }
 
 

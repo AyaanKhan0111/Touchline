@@ -761,14 +761,14 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       final squadRows = await db.rawQuery('''
         SELECT * FROM players
         WHERE player_name IN ($placeholders) OR player_id IN ($placeholders)
-        GROUP BY player_name
-        ORDER BY season DESC, overall DESC
+        ORDER BY overall DESC, season DESC
       ''', [...squadIds, ...squadIds]);
 
       final Map<String, Player> playerByName = {};
       for (final r in squadRows) {
         final p = Player.fromMap(r);
         playerByName.putIfAbsent(p.name.trim().toLowerCase(), () => p);
+        playerByName.putIfAbsent(p.playerId.trim().toLowerCase(), () => p);
       }
 
       final List<Player> orderedList = [];
@@ -825,8 +825,15 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
           }
         }
         if (dynamicRating != null || dynamicAge != null) {
+          int finalOvr = dynamicRating ?? p.overall;
+          final effectiveAge = dynamicAge?.toDouble() ?? p.age ?? 25.0;
+          // Fix 33: Non-veterans (age < 33) never decline below their peak canonical rating.
+          // Automatically heal any legacy save corruption (e.g. Saka showing 65 instead of 88).
+          if (effectiveAge < 33 && finalOvr < p.overall) {
+            finalOvr = p.overall;
+          }
           return p.copyWith(
-            overall: dynamicRating ?? p.overall,
+            overall: finalOvr,
             age: dynamicAge?.toDouble() ?? p.age,
           );
         }
@@ -999,13 +1006,21 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         SELECT player_name, primary_position, overall
         FROM players
         WHERE team_name LIKE ?
-        GROUP BY player_name
-        ORDER BY season DESC, overall DESC
-        LIMIT 25
+        ORDER BY overall DESC, season DESC
       ''', ['%$queryClub%']);
 
-      if (rows.isNotEmpty) {
-        final rawSimPlayers = rows.map((r) => SimPlayer(
+      final seenNames = <String>{};
+      final distinctRows = <Map<String, dynamic>>[];
+      for (final r in rows) {
+        final name = (r['player_name'] as String).trim().toLowerCase();
+        if (seenNames.add(name)) {
+          distinctRows.add(r);
+          if (distinctRows.length == 25) break;
+        }
+      }
+
+      if (distinctRows.isNotEmpty) {
+        final rawSimPlayers = distinctRows.map((r) => SimPlayer(
           name: r['player_name'] as String,
           position: r['primary_position'] as String? ?? 'CM',
           overall: (r['overall'] as num?)?.toInt() ?? 78,
@@ -1127,8 +1142,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         SELECT *
         FROM players
         WHERE team_name LIKE ? AND season >= ? AND ($positionCondition)
-        GROUP BY player_name
-        ORDER BY season DESC, overall DESC
+        ORDER BY overall DESC, season DESC
       ''', ['%$queryClub%', minSeason]);
 
       // Step B: Fall back to all club records if position needs more depth
@@ -1137,8 +1151,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
           SELECT *
           FROM players
           WHERE team_name LIKE ? AND ($positionCondition)
-          GROUP BY player_name
-          ORDER BY season DESC, overall DESC
+          ORDER BY overall DESC, season DESC
         ''', ['%$queryClub%']);
       }
 
@@ -1180,8 +1193,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         SELECT *
         FROM players
         WHERE team_name LIKE ?
-        GROUP BY player_name
-        ORDER BY season DESC, overall DESC
+        ORDER BY overall DESC, season DESC
       ''', ['%$queryClub%']);
 
       for (final r in extraRows) {
@@ -1213,9 +1225,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         SELECT *
         FROM players
         WHERE season >= 2022 AND ($positionCondition) AND overall BETWEEN ? AND ?
-        GROUP BY player_name
-        ORDER BY RANDOM()
-        LIMIT 40
+        ORDER BY overall DESC, season DESC
       ''', [minOvr, maxOvr]);
 
       // Fallback to all eras if needed
@@ -1224,22 +1234,28 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
           SELECT *
           FROM players
           WHERE ($positionCondition) AND overall BETWEEN ? AND ?
-          GROUP BY player_name
-          ORDER BY RANDOM()
-          LIMIT 40
+          ORDER BY overall DESC, season DESC
         ''', [minOvr - 4, maxOvr + 4]);
       }
 
-      int picked = 0;
+      final pool = <Player>[];
+      final seenCands = <String>{};
       for (final r in rows) {
         final p = Player.fromMap(r);
         final normName = p.name.trim().toLowerCase();
-        if (!usedNames.contains(normName)) {
-          usedNames.add(normName);
-          squad.add(p);
-          picked++;
-          if (picked == count) break;
+        if (seenCands.add(normName) && !usedNames.contains(normName)) {
+          pool.add(p);
         }
+      }
+      pool.shuffle();
+
+      int picked = 0;
+      for (final p in pool) {
+        final normName = p.name.trim().toLowerCase();
+        usedNames.add(normName);
+        squad.add(p);
+        picked++;
+        if (picked == count) break;
       }
     }
 
@@ -1301,9 +1317,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       SELECT *
       FROM players
       WHERE overall >= 80 AND season >= 2022 AND ($posCond)
-      GROUP BY player_name
-      ORDER BY RANDOM()
-      LIMIT 40
+      ORDER BY overall DESC, season DESC
     ''');
 
     if (rows.isEmpty) {
@@ -1311,25 +1325,26 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         SELECT *
         FROM players
         WHERE overall >= 80 AND ($posCond)
-        GROUP BY player_name
-        ORDER BY RANDOM()
-        LIMIT 40
+        ORDER BY overall DESC, season DESC
       ''');
     }
 
-    Player? replacement;
+    final pool = <Player>[];
+    final seenCands = <String>{};
     for (final r in rows) {
       final cand = Player.fromMap(r);
-      if (!existingNames.contains(cand.name.trim().toLowerCase())) {
-        replacement = cand;
-        break;
+      final norm = cand.name.trim().toLowerCase();
+      if (seenCands.add(norm) && !existingNames.contains(norm)) {
+        pool.add(cand);
       }
     }
+    pool.shuffle();
+    final Player? replacement = pool.isNotEmpty ? pool.first : null;
 
     if (replacement != null && mounted) {
       SoundService.instance.playCorrect();
       setState(() {
-        _draftedRandomSquad[index] = replacement!;
+        _draftedRandomSquad[index] = replacement;
         _draftedRandomSquad = _sortSquadTactically(_draftedRandomSquad);
         _draftSwapsRemaining--;
       });

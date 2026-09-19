@@ -115,21 +115,30 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
             SELECT *
             FROM players
             WHERE season >= 2022 $posWhere $searchClause
-            GROUP BY player_name
-            ORDER BY MAX(overall) DESC
-            LIMIT 60
+            ORDER BY overall DESC, season DESC
           ''', searchParams);
-          loaded = rows.map((r) => Player.fromMap(r)).toList();
+          final seenAll = <String>{};
+          for (final r in rows) {
+            final p = Player.fromMap(r);
+            if (seenAll.add(p.name.trim().toLowerCase())) {
+              loaded.add(p);
+              if (loaded.length == 60) break;
+            }
+          }
           if (loaded.isEmpty && query.isNotEmpty) {
             final fallbackRows = await db.rawQuery('''
               SELECT *
               FROM players
               WHERE 1=1 $posWhere $searchClause
-              GROUP BY player_name
-              ORDER BY MAX(overall) DESC
-              LIMIT 60
+              ORDER BY overall DESC, season DESC
             ''', searchParams);
-            loaded = fallbackRows.map((r) => Player.fromMap(r)).toList();
+            for (final r in fallbackRows) {
+              final p = Player.fromMap(r);
+              if (seenAll.add(p.name.trim().toLowerCase())) {
+                loaded.add(p);
+                if (loaded.length == 60) break;
+              }
+            }
           }
           break;
 
@@ -138,15 +147,19 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
             SELECT *
             FROM players
             WHERE season >= 2022 $posWhere $searchClause
-            GROUP BY player_name
-            ORDER BY MAX(overall) DESC
-            LIMIT 250
+            ORDER BY overall DESC, season DESC
           ''', searchParams);
-          final candidates = rows.map((r) => Player.fromMap(r)).toList();
-          loaded = candidates.where((p) {
-            final status = TransferMarketService.computePlayerContract(p.name, widget.currentSeason);
-            return status.isFreeAgent;
-          }).take(60).toList();
+          final seenFree = <String>{};
+          for (final r in rows) {
+            final p = Player.fromMap(r);
+            if (seenFree.add(p.name.trim().toLowerCase())) {
+              final status = TransferMarketService.computePlayerContract(p.name, widget.currentSeason);
+              if (status.isFreeAgent) {
+                loaded.add(p);
+                if (loaded.length == 60) break;
+              }
+            }
+          }
           break;
 
         case MarketCategory.expiring:
@@ -154,15 +167,19 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
             SELECT *
             FROM players
             WHERE season >= 2022 $posWhere $searchClause
-            GROUP BY player_name
-            ORDER BY MAX(overall) DESC
-            LIMIT 250
+            ORDER BY overall DESC, season DESC
           ''', searchParams);
-          final candidates = rows.map((r) => Player.fromMap(r)).toList();
-          loaded = candidates.where((p) {
-            final status = TransferMarketService.computePlayerContract(p.name, widget.currentSeason);
-            return status.isExpiring;
-          }).take(60).toList();
+          final seenExp = <String>{};
+          for (final r in rows) {
+            final p = Player.fromMap(r);
+            if (seenExp.add(p.name.trim().toLowerCase())) {
+              final status = TransferMarketService.computePlayerContract(p.name, widget.currentSeason);
+              if (status.isExpiring) {
+                loaded.add(p);
+                if (loaded.length == 60) break;
+              }
+            }
+          }
           break;
 
         case MarketCategory.wonderkids:
@@ -188,20 +205,19 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
             SELECT *
             FROM players
             WHERE season >= 2022 AND age <= 21 AND potential >= 80 $posWhere $searchClause
-            GROUP BY player_name
-            ORDER BY MAX(potential) DESC
-            LIMIT 45
+            ORDER BY potential DESC, overall DESC, season DESC
           ''', searchParams);
-          final dbWonderkids = rows.map((r) => Player.fromMap(r)).toList();
 
           final seen = <String>{};
           for (final p in academy) {
             seen.add(p.name.trim().toLowerCase());
             loaded.add(p);
           }
-          for (final p in dbWonderkids) {
+          for (final r in rows) {
+            final p = Player.fromMap(r);
             if (seen.add(p.name.trim().toLowerCase())) {
               loaded.add(p);
+              if (loaded.length >= 60) break;
             }
           }
           break;
@@ -211,12 +227,18 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
             SELECT *
             FROM players
             WHERE season >= 2022 AND overall BETWEEN 73 AND 83 $posWhere $searchClause
-            GROUP BY player_name
-            ORDER BY MAX(overall) DESC
-            LIMIT 100
+            ORDER BY overall DESC, season DESC
           ''', searchParams);
-          final candidates = rows.map((r) => Player.fromMap(r)).toList();
-          loaded = candidates.where((p) => calculatePlayerValuation(p) <= 15.0).take(60).toList();
+          final seenGems = <String>{};
+          for (final r in rows) {
+            final p = Player.fromMap(r);
+            if (seenGems.add(p.name.trim().toLowerCase())) {
+              if (calculatePlayerValuation(p) <= 15.0) {
+                loaded.add(p);
+                if (loaded.length == 60) break;
+              }
+            }
+          }
           break;
       }
 
