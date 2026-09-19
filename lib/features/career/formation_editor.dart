@@ -269,6 +269,199 @@ class TacticalFormation {
       orElse: () => presets.first,
     );
   }
+
+  /// Categorizes a pitch slot into a macro position group ('GK', 'DEF', 'MID', 'FWD')
+  static String getSlotPositionGroup(PitchSlot slot, int slotIndex) {
+    if (slotIndex == 0) return 'GK';
+    final role = slot.defaultRole.toUpperCase();
+    if (role == 'GK') return 'GK';
+    if (const ['ST', 'CF', 'LW', 'RW', 'RF', 'LF', 'SS'].contains(role)) return 'FWD';
+    if (const ['CB', 'LCB', 'RCB', 'LB', 'RB'].contains(role)) return 'DEF';
+    if (const ['CM', 'CAM', 'CDM', 'LM', 'RM', 'LCM', 'RCM', 'LDM', 'RDM', 'AM'].contains(role)) return 'MID';
+    if (role == 'LWB' || role == 'RWB') {
+      return slot.y > 0.60 ? 'DEF' : 'MID';
+    }
+    if (slot.y <= 0.30) return 'FWD';
+    if (slot.y > 0.60) return 'DEF';
+    return 'MID';
+  }
+
+  /// Categorizes a player into a macro position group ('GK', 'DEF', 'MID', 'FWD')
+  static String getPlayerPositionGroup(Player p) {
+    if (p.isGoalkeeper || p.primaryPosition.toUpperCase() == 'GK') return 'GK';
+    final pos = p.primaryPosition.toUpperCase();
+    if (const ['CB', 'LB', 'RB', 'LWB', 'RWB', 'LCB', 'RCB'].contains(pos)) return 'DEF';
+    if (const ['CM', 'CAM', 'CDM', 'LM', 'RM', 'LCM', 'RCM', 'LDM', 'RDM', 'AM'].contains(pos)) return 'MID';
+    if (const ['ST', 'CF', 'LW', 'RW', 'RF', 'LF', 'SS'].contains(pos)) return 'FWD';
+    return 'MID';
+  }
+
+  /// Automatically picks the highest-rated tactical starting XI strictly adhering to the active formation's
+  /// positional quotas (GK, DEF, MID, FWD) so a defender never displaces a lower-rated attacker (Fix 35).
+  static List<Player> autoPickLineup(
+    List<Player> squad, {
+    required String formationId,
+    List<PitchSlot>? customSlots,
+  }) {
+    if (squad.length < 11) return squad;
+
+    final formation = getById(formationId);
+    final activeSlots = (customSlots != null && customSlots.length == 11)
+        ? customSlots
+        : formation.slots;
+
+    // 1. Separate squad players into position groups, sorted descending by overall
+    final pool = List<Player>.from(squad);
+    final gks = pool.where((p) => p.isGoalkeeper || p.primaryPosition.toUpperCase() == 'GK').toList()
+      ..sort((a, b) => b.overall.compareTo(a.overall));
+
+    final defs = pool.where((p) => !p.isGoalkeeper && p.primaryPosition.toUpperCase() != 'GK' &&
+        getPlayerPositionGroup(p) == 'DEF').toList()
+      ..sort((a, b) => b.overall.compareTo(a.overall));
+
+    final mids = pool.where((p) => !p.isGoalkeeper && p.primaryPosition.toUpperCase() != 'GK' &&
+        getPlayerPositionGroup(p) == 'MID').toList()
+      ..sort((a, b) => b.overall.compareTo(a.overall));
+
+    final fwds = pool.where((p) => !p.isGoalkeeper && p.primaryPosition.toUpperCase() != 'GK' &&
+        getPlayerPositionGroup(p) == 'FWD').toList()
+      ..sort((a, b) => b.overall.compareTo(a.overall));
+
+    final otherOutfield = pool.where((p) => !gks.contains(p) && !defs.contains(p) &&
+        !mids.contains(p) && !fwds.contains(p)).toList()
+      ..sort((a, b) => b.overall.compareTo(a.overall));
+
+    // 2. Count slots needed per position group in this formation
+    int neededGk = 0;
+    int neededDef = 0;
+    int neededMid = 0;
+    int neededFwd = 0;
+    for (int i = 0; i < 11; i++) {
+      final grp = getSlotPositionGroup(activeSlots[i], i);
+      if (grp == 'GK') {
+        neededGk++;
+      } else if (grp == 'DEF') {
+        neededDef++;
+      } else if (grp == 'MID') {
+        neededMid++;
+      } else if (grp == 'FWD') {
+        neededFwd++;
+      }
+    }
+
+    // 3. Select best players for each group according to formation quotas (Defenders CANNOT take Attacker slots)
+    final selectedGks = gks.take(neededGk).toList();
+    final remainingGks = gks.skip(neededGk).toList();
+
+    final selectedDefs = defs.take(neededDef).toList();
+    final remainingDefs = defs.skip(neededDef).toList();
+
+    final selectedMids = mids.take(neededMid).toList();
+    final remainingMids = mids.skip(neededMid).toList();
+
+    final selectedFwds = fwds.take(neededFwd).toList();
+    final remainingFwds = fwds.skip(neededFwd).toList();
+
+    // 4. Handle rare shortfalls if squad has fewer natural players than formation requires for a group
+    final selectedStarters = <Player>[...selectedGks, ...selectedDefs, ...selectedMids, ...selectedFwds];
+    final unselectedOutfield = [
+      ...remainingDefs,
+      ...remainingMids,
+      ...remainingFwds,
+      ...otherOutfield,
+    ]..sort((a, b) => b.overall.compareTo(a.overall));
+
+    final neededShortfall = 11 - selectedStarters.length;
+    for (int i = 0; i < neededShortfall && unselectedOutfield.isNotEmpty; i++) {
+      selectedStarters.add(unselectedOutfield.removeAt(0));
+    }
+
+    // 5. Assign the 11 selected starters to the 11 slots (matching slot role preferences)
+    final assignedStarters = List<Player?>.filled(11, null);
+    final availableForSlots = List<Player>.from(selectedStarters);
+
+    // Slot 0 is strictly Goalkeeper
+    final gkIndex = availableForSlots.indexWhere((p) => p.isGoalkeeper || p.primaryPosition.toUpperCase() == 'GK');
+    if (gkIndex != -1) {
+      assignedStarters[0] = availableForSlots.removeAt(gkIndex);
+    } else if (availableForSlots.isNotEmpty) {
+      assignedStarters[0] = availableForSlots.removeAt(0);
+    }
+
+    // Assign outfield slots 1..10 in 4 priority passes:
+    // Pass 1: Exact primary position match (e.g. ST for ST slot, LB for LB slot)
+    for (int i = 1; i < 11; i++) {
+      if (assignedStarters[i] != null) continue;
+      final targetRole = activeSlots[i].defaultRole.toUpperCase();
+      final matchIdx = availableForSlots.indexWhere(
+        (p) => p.primaryPosition.toUpperCase() == targetRole,
+      );
+      if (matchIdx != -1) {
+        assignedStarters[i] = availableForSlots.removeAt(matchIdx);
+      }
+    }
+
+    // Pass 2: Secondary positions contain target role
+    for (int i = 1; i < 11; i++) {
+      if (assignedStarters[i] != null) continue;
+      final targetRole = activeSlots[i].defaultRole.toUpperCase();
+      final matchIdx = availableForSlots.indexWhere(
+        (p) => p.allPositions.toUpperCase().split(',').map((s) => s.trim()).contains(targetRole),
+      );
+      if (matchIdx != -1) {
+        assignedStarters[i] = availableForSlots.removeAt(matchIdx);
+      }
+    }
+
+    // Pass 3: Same position group (e.g. any DEF for DEF slot, any FWD for FWD slot)
+    for (int i = 1; i < 11; i++) {
+      if (assignedStarters[i] != null) continue;
+      final targetGroup = getSlotPositionGroup(activeSlots[i], i);
+      final matchIdx = availableForSlots.indexWhere(
+        (p) => getPlayerPositionGroup(p) == targetGroup,
+      );
+      if (matchIdx != -1) {
+        assignedStarters[i] = availableForSlots.removeAt(matchIdx);
+      }
+    }
+
+    // Pass 4: Any available starter
+    for (int i = 1; i < 11; i++) {
+      if (assignedStarters[i] != null) continue;
+      if (availableForSlots.isNotEmpty) {
+        assignedStarters[i] = availableForSlots.removeAt(0);
+      }
+    }
+
+    final finalStarters = assignedStarters.whereType<Player>().toList();
+
+    // 6. Bench & Reserves
+    // Index 11 is strictly the Backup GK (Bench GK)
+    final benchGk = remainingGks.isNotEmpty ? [remainingGks.first] : <Player>[];
+    final extraGks = remainingGks.length > 1 ? remainingGks.skip(1).toList() : <Player>[];
+
+    // Outfield reserves (sorted descending by rating)
+    final starterIds = finalStarters.map((p) => p.playerId.isNotEmpty ? p.playerId : p.name).toSet();
+    final benchGkIds = benchGk.map((p) => p.playerId.isNotEmpty ? p.playerId : p.name).toSet();
+    final extraGkIds = extraGks.map((p) => p.playerId.isNotEmpty ? p.playerId : p.name).toSet();
+
+    final benchOutfield = pool
+        .where((p) {
+          final id = p.playerId.isNotEmpty ? p.playerId : p.name;
+          return !starterIds.contains(id) &&
+                 !benchGkIds.contains(id) &&
+                 !extraGkIds.contains(id);
+        })
+        .toList()
+      ..sort((a, b) => b.overall.compareTo(a.overall));
+
+    return [
+      ...finalStarters,
+      ...benchGk,
+      ...benchOutfield,
+      ...extraGks,
+    ];
+  }
 }
 
 /// Custom painter for authentic football pitch with stripes, markings and grass gradient
@@ -527,6 +720,32 @@ class _FormationEditorSheetState extends State<FormationEditorSheet> {
     });
   }
 
+  void _autoPickLineup() {
+    SoundService.instance.playCorrect();
+    setState(() {
+      _squad = TacticalFormation.autoPickLineup(
+        _squad,
+        formationId: _formationId,
+        customSlots: _currentSlots,
+      );
+      _selectedPlayerIndex = null;
+      _draggingSlotIndex = null;
+      widget.onSave(_formationId, _squad, _currentSlots);
+    });
+    final starters = _squad.take(11).toList();
+    final avg = (starters.map((p) => p.overall).reduce((a, b) => a + b) / 11.0).toStringAsFixed(1);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: AppPalette.gold,
+        content: Text(
+          'Auto-Pick: Optimal XI selected for $_formationId (Avg: $avg OVR)',
+          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black),
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
   Color _getOvrColor(int ovr) {
     if (ovr >= 85) return const Color(0xFFFFD700); // Gold
     if (ovr >= 80) return const Color(0xFF00E5FF); // Electric Cyan
@@ -645,6 +864,35 @@ class _FormationEditorSheetState extends State<FormationEditorSheet> {
                     ],
                   ),
                 ),
+                // Auto-Pick Best XI Button
+                InkWell(
+                  onTap: _autoPickLineup,
+                  borderRadius: BorderRadius.circular(10),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: AppPalette.gold.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: AppPalette.gold.withValues(alpha: 0.5)),
+                    ),
+                    child: const Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.auto_awesome, color: AppPalette.gold, size: 13),
+                        SizedBox(width: 4),
+                        Text(
+                          'AUTO-PICK',
+                          style: TextStyle(
+                            color: AppPalette.gold,
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
                 // Formation Dropdown
                 PopupMenuButton<String>(
                   initialValue: _formationId,

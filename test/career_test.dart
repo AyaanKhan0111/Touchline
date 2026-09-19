@@ -4117,6 +4117,149 @@ void main() {
       expect(aiClubPlayers['Real Madrid']!.first.name, 'Bukayo Saka');
     });
   });
+
+  group('Fix 35: Formation-Aware Auto-Pick Best XI With Strict Positional Quotas', () {
+    Player makeTestPlayer({
+      required String id,
+      required String name,
+      required String pos,
+      required int ovr,
+      bool isGk = false,
+      String? allPos,
+    }) {
+      return Player(
+        mode: 'pl',
+        squadId: 'squad_test',
+        teamCode: 'ARS',
+        teamName: 'Arsenal',
+        season: 2024,
+        playerId: id,
+        name: name,
+        overall: ovr,
+        displayPosition: pos,
+        primaryPosition: pos,
+        allPositions: allPos ?? pos,
+        pace: 75,
+        shooting: 75,
+        passing: 75,
+        dribbling: 75,
+        defending: 75,
+        physicality: 75,
+        isGoalkeeper: isGk,
+      );
+    }
+
+    test('In 4-3-3 formation, 3rd attacker is chosen over higher rated 5th defender', () {
+      final squad = [
+        // 2 GKs
+        makeTestPlayer(id: 'gk1', name: 'Alisson', pos: 'GK', ovr: 89, isGk: true),
+        makeTestPlayer(id: 'gk2', name: 'Kelleher', pos: 'GK', ovr: 77, isGk: true),
+
+        // 6 Defenders (all high rated)
+        makeTestPlayer(id: 'def1', name: 'Van Dijk', pos: 'CB', ovr: 89),
+        makeTestPlayer(id: 'def2', name: 'Saliba', pos: 'CB', ovr: 88),
+        makeTestPlayer(id: 'def3', name: 'Robertson', pos: 'LB', ovr: 86),
+        makeTestPlayer(id: 'def4', name: 'Alexander-Arnold', pos: 'RB', ovr: 86),
+        makeTestPlayer(id: 'def5', name: 'Konate', pos: 'CB', ovr: 85),
+        makeTestPlayer(id: 'def6', name: 'Gabriel', pos: 'CB', ovr: 84),
+
+        // 5 Midfielders
+        makeTestPlayer(id: 'mid1', name: 'De Bruyne', pos: 'CAM', ovr: 91),
+        makeTestPlayer(id: 'mid2', name: 'Rodri', pos: 'CDM', ovr: 90),
+        makeTestPlayer(id: 'mid3', name: 'Odegaard', pos: 'CM', ovr: 88),
+        makeTestPlayer(id: 'mid4', name: 'Rice', pos: 'CDM', ovr: 86),
+        makeTestPlayer(id: 'mid5', name: 'Mac Allister', pos: 'CM', ovr: 84),
+
+        // 4 Attackers (3rd attacker is 80 OVR, lower than def5/def6/mid4/mid5)
+        makeTestPlayer(id: 'fwd1', name: 'Salah', pos: 'RW', ovr: 89),
+        makeTestPlayer(id: 'fwd2', name: 'Haaland', pos: 'ST', ovr: 91),
+        makeTestPlayer(id: 'fwd3', name: 'Martinelli', pos: 'LW', ovr: 80),
+        makeTestPlayer(id: 'fwd4', name: 'Nketiah', pos: 'ST', ovr: 75),
+      ];
+
+      final sorted = TacticalFormation.autoPickLineup(squad, formationId: '4-3-3');
+
+      // Total length preserved
+      expect(sorted.length, squad.length);
+
+      final starters = sorted.take(11).toList();
+      final starterIds = starters.map((p) => p.playerId).toSet();
+
+      // Exactly 1 GK, 4 DEF, 3 MID, 3 FWD in starters
+      final startingGks = starters.where((p) => p.isGoalkeeper || p.primaryPosition == 'GK').toList();
+      final startingDefs = starters.where((p) => const ['CB', 'LB', 'RB', 'LWB', 'RWB'].contains(p.primaryPosition)).toList();
+      final startingMids = starters.where((p) => const ['CM', 'CAM', 'CDM', 'LM', 'RM'].contains(p.primaryPosition)).toList();
+      final startingFwds = starters.where((p) => const ['ST', 'CF', 'LW', 'RW'].contains(p.primaryPosition)).toList();
+
+      expect(startingGks.length, 1, reason: '4-3-3 must have exactly 1 GK starter');
+      expect(startingDefs.length, 4, reason: '4-3-3 must have exactly 4 DEF starters');
+      expect(startingMids.length, 3, reason: '4-3-3 must have exactly 3 MID starters');
+      expect(startingFwds.length, 3, reason: '4-3-3 must have exactly 3 FWD starters');
+
+      // KEY REQUIREMENT: Martinelli (80 OVR FWD) MUST start in 4-3-3 over Konate (85 OVR DEF)
+      expect(starterIds.contains('fwd3'), isTrue,
+          reason: 'A defender cannot play in place of a lower rated attacker');
+      expect(starterIds.contains('def5'), isFalse,
+          reason: '5th defender (85 OVR) cannot displace 3rd forward (80 OVR) in 4-3-3');
+      expect(starterIds.contains('def6'), isFalse,
+          reason: '6th defender (84 OVR) cannot displace 3rd forward (80 OVR) in 4-3-3');
+
+      // Bench GK at index 11
+      expect(sorted[11].playerId, 'gk2');
+
+      // Konate (85 OVR) is on the bench as top outfield reserve
+      final bench = sorted.skip(11).toList();
+      expect(bench.any((p) => p.playerId == 'def5'), isTrue);
+    });
+
+    test('In 3-4-3 formation, 3 defenders and 3 forwards are strictly selected', () {
+      final squad = [
+        makeTestPlayer(id: 'gk1', name: 'GK1', pos: 'GK', ovr: 85, isGk: true),
+        makeTestPlayer(id: 'gk2', name: 'GK2', pos: 'GK', ovr: 75, isGk: true),
+
+        makeTestPlayer(id: 'def1', name: 'DEF1', pos: 'CB', ovr: 88),
+        makeTestPlayer(id: 'def2', name: 'DEF2', pos: 'CB', ovr: 87),
+        makeTestPlayer(id: 'def3', name: 'DEF3', pos: 'CB', ovr: 86),
+        makeTestPlayer(id: 'def4', name: 'DEF4', pos: 'CB', ovr: 85),
+
+        makeTestPlayer(id: 'mid1', name: 'MID1', pos: 'CM', ovr: 87),
+        makeTestPlayer(id: 'mid2', name: 'MID2', pos: 'LM', ovr: 86),
+        makeTestPlayer(id: 'mid3', name: 'MID3', pos: 'RM', ovr: 85),
+        makeTestPlayer(id: 'mid4', name: 'MID4', pos: 'CM', ovr: 84),
+
+        makeTestPlayer(id: 'fwd1', name: 'FWD1', pos: 'LW', ovr: 86),
+        makeTestPlayer(id: 'fwd2', name: 'FWD2', pos: 'ST', ovr: 85),
+        makeTestPlayer(id: 'fwd3', name: 'FWD3', pos: 'RW', ovr: 79),
+      ];
+
+      final sorted = TacticalFormation.autoPickLineup(squad, formationId: '3-4-3');
+      final starters = sorted.take(11).toList();
+      final starterIds = starters.map((p) => p.playerId).toSet();
+
+      // 3-4-3 has 3 DEF, 4 MID, 3 FWD
+      expect(starterIds.contains('fwd3'), isTrue,
+          reason: 'FWD3 (79 OVR) must start in 3-4-3 over DEF4 (85 OVR)');
+      expect(starterIds.contains('def4'), isFalse,
+          reason: '4th defender cannot start in 3-defender formation');
+    });
+
+    test('Macro position groups correctly categorize roles and coordinates', () {
+      expect(TacticalFormation.getPlayerPositionGroup(
+        makeTestPlayer(id: '1', name: 'P', pos: 'CB', ovr: 80)), 'DEF');
+      expect(TacticalFormation.getPlayerPositionGroup(
+        makeTestPlayer(id: '2', name: 'P', pos: 'RB', ovr: 80)), 'DEF');
+      expect(TacticalFormation.getPlayerPositionGroup(
+        makeTestPlayer(id: '3', name: 'P', pos: 'CM', ovr: 80)), 'MID');
+      expect(TacticalFormation.getPlayerPositionGroup(
+        makeTestPlayer(id: '4', name: 'P', pos: 'CAM', ovr: 80)), 'MID');
+      expect(TacticalFormation.getPlayerPositionGroup(
+        makeTestPlayer(id: '5', name: 'P', pos: 'LW', ovr: 80)), 'FWD');
+      expect(TacticalFormation.getPlayerPositionGroup(
+        makeTestPlayer(id: '6', name: 'P', pos: 'ST', ovr: 80)), 'FWD');
+      expect(TacticalFormation.getPlayerPositionGroup(
+        makeTestPlayer(id: '7', name: 'P', pos: 'GK', ovr: 80, isGk: true)), 'GK');
+    });
+  });
 }
 
 

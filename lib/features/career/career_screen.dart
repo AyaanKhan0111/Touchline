@@ -1217,66 +1217,17 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
 
   /// Tactically sorts squad so:
   /// - Index 0 is strictly the 1st Goalkeeper (Starting GK)
-  /// - Indices 1..10 are 10 Outfield Starters (4 DEF, 4 MID, 2 FWD)
-  /// - Index 11 is strictly the 2nd Goalkeeper (Bench GK)
-  /// - Indices 12..17 are Outfield Reserves (Fix 25 / User Fix 3)
-  List<Player> _sortSquadTactically(List<Player> squad) {
+  /// - Starters (indices 0..10) strictly matching positional quotas of the active formation
+  /// - Index 11 is strictly the Backup Goalkeeper (Bench GK)
+  /// - Indices 12..end are Outfield Reserves (Fix 35 / Fix 25 / User Fix 3)
+  List<Player> _sortSquadTactically(List<Player> squad, [String? formationId]) {
     if (squad.isEmpty) return squad;
-
-    final gks = squad.where((p) => p.isGoalkeeper || p.primaryPosition == 'GK').toList()
-      ..sort((a, b) => b.overall.compareTo(a.overall));
-    final defs = squad.where((p) => !p.isGoalkeeper && const ['CB', 'LB', 'RB', 'LWB', 'RWB'].contains(p.primaryPosition)).toList()
-      ..sort((a, b) => b.overall.compareTo(a.overall));
-    final mids = squad.where((p) => !p.isGoalkeeper && const ['CM', 'CAM', 'CDM', 'LM', 'RM'].contains(p.primaryPosition)).toList()
-      ..sort((a, b) => b.overall.compareTo(a.overall));
-    final fwds = squad.where((p) => !p.isGoalkeeper && const ['ST', 'CF', 'LW', 'RW'].contains(p.primaryPosition)).toList()
-      ..sort((a, b) => b.overall.compareTo(a.overall));
-    final otherOutfield = squad.where((p) => !p.isGoalkeeper && p.primaryPosition != 'GK' &&
-        !const ['CB', 'LB', 'RB', 'LWB', 'RWB', 'CM', 'CAM', 'CDM', 'LM', 'RM', 'ST', 'CF', 'LW', 'RW'].contains(p.primaryPosition)).toList()
-      ..sort((a, b) => b.overall.compareTo(a.overall));
-
-    // Starters (11 players)
-    final starterGk = gks.isNotEmpty ? [gks.first] : <Player>[];
-    final starterDefs = defs.take(4).toList();
-    final remainingDefs = defs.skip(4).toList();
-
-    final starterMids = mids.take(4).toList();
-    final remainingMids = mids.skip(4).toList();
-
-    final starterFwds = fwds.take(2).toList();
-    final remainingFwds = fwds.skip(2).toList();
-
-    final starters = <Player>[
-      ...starterGk,
-      ...starterDefs,
-      ...starterMids,
-      ...starterFwds,
-    ];
-
-    // Outfield pool for filling any incomplete positions
-    final poolOutfield = [
-      ...remainingDefs,
-      ...remainingMids,
-      ...remainingFwds,
-      ...otherOutfield,
-    ]..sort((a, b) => b.overall.compareTo(a.overall));
-
-    while (starters.length < 11 && poolOutfield.isNotEmpty) {
-      starters.add(poolOutfield.removeAt(0));
-    }
-
-    // Bench (indices 11 to 17):
-    // Reserve GK at index 11
-    final benchGk = gks.length > 1 ? [gks[1]] : <Player>[];
-    final extraGks = gks.length > 2 ? gks.skip(2).toList() : <Player>[];
-
-    final bench = <Player>[
-      ...benchGk,
-      ...poolOutfield,
-      ...extraGks,
-    ];
-
-    return [...starters, ...bench];
+    final fid = formationId ?? _formationId;
+    return TacticalFormation.autoPickLineup(
+      squad,
+      formationId: fid,
+      customSlots: _customFormationSlots[fid],
+    );
   }
 
   Future<List<Player>> _loadRealSquad(Database db, String clubName) async {
@@ -2455,73 +2406,30 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     );
   }
 
-  /// Automatically picks the highest-rated tactical starting XI (1 GK, 4 DEF, 4 MID, 2 FWD) (Issue #9)
+  /// Automatically picks the highest-rated tactical starting XI strictly adhering to the active
+  /// formation's positional quotas (GK, DEF, MID, FWD) so a defender never displaces a lower-rated
+  /// attacker (Fix 35).
   void _autoPickBestXi() {
     if (_userSquad.length < 11) return;
     SoundService.instance.playCorrect();
 
-    final pool = List<Player>.from(_userSquad);
-    final startingXi = <Player>[];
-
-    // 1 GK: Highest rated goalkeeper
-    final gks = pool.where((p) => p.primaryPosition == 'GK').toList()
-      ..sort((a, b) => b.overall.compareTo(a.overall));
-    if (gks.isNotEmpty) {
-      startingXi.add(gks.first);
-      pool.remove(gks.first);
-    }
-
-    // 4 DEF: Highest rated defenders
-    final defs = pool
-        .where((p) => const ['CB', 'LB', 'RB', 'LWB', 'RWB'].contains(p.primaryPosition))
-        .toList()
-      ..sort((a, b) => b.overall.compareTo(a.overall));
-    for (int i = 0; i < min(4, defs.length); i++) {
-      startingXi.add(defs[i]);
-      pool.remove(defs[i]);
-    }
-
-    // 4 MID: Highest rated midfielders
-    final mids = pool
-        .where((p) => const ['CM', 'CAM', 'CDM', 'LM', 'RM'].contains(p.primaryPosition))
-        .toList()
-      ..sort((a, b) => b.overall.compareTo(a.overall));
-    for (int i = 0; i < min(4, mids.length); i++) {
-      startingXi.add(mids[i]);
-      pool.remove(mids[i]);
-    }
-
-    // 2 FWD: Highest rated forwards
-    final fwds = pool
-        .where((p) => const ['ST', 'CF', 'LW', 'RW'].contains(p.primaryPosition))
-        .toList()
-      ..sort((a, b) => b.overall.compareTo(a.overall));
-    for (int i = 0; i < min(2, fwds.length); i++) {
-      startingXi.add(fwds[i]);
-      pool.remove(fwds[i]);
-    }
-
-    // Backfill if any position group had fewer than needed
-    pool.sort((a, b) => b.overall.compareTo(a.overall));
-    while (startingXi.length < 11 && pool.isNotEmpty) {
-      startingXi.add(pool.removeAt(0));
-    }
-
-    // Remaining players are Bench/Reserves sorted descending by overall
-    pool.sort((a, b) => b.overall.compareTo(a.overall));
-
     setState(() {
-      _userSquad = [...startingXi, ...pool];
+      _userSquad = TacticalFormation.autoPickLineup(
+        _userSquad,
+        formationId: _formationId,
+        customSlots: _customFormationSlots[_formationId],
+      );
     });
 
     _persistCareerState();
 
+    final startingXi = _userSquad.take(11).toList();
     final avgOvr = (startingXi.map((p) => p.overall).reduce((a, b) => a + b) / 11.0).toStringAsFixed(1);
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         backgroundColor: AppPalette.gold,
         content: Text(
-          'Tactical Auto-Pick: Optimal XI selected! (Starting XI Avg: $avgOvr OVR)',
+          'Tactical Auto-Pick: Optimal XI selected for $_formationId! (Starting XI Avg: $avgOvr OVR)',
           style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black),
         ),
       ),
