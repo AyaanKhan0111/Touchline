@@ -129,6 +129,10 @@ class PrefsService {
   static const _keyCareerLeagueClubRatingTotals = 'career_league_club_rating_totals';
   static const _keyCareerLeagueClubRatingCounts = 'career_league_club_rating_counts';
   static const _keyCareerRecentUclResults = 'career_recent_ucl_results';
+  static const _keyCareerFaCupTournament = 'career_fa_cup_tournament';
+  static const _keyCareerCarabaoCupTournament = 'career_carabao_cup_tournament';
+  static const _keyCareerRecentFaCupResults = 'career_recent_fa_cup_results';
+  static const _keyCareerRecentCarabaoResults = 'career_recent_carabao_results';
 
   Future<Map<String, dynamic>?> getCareerConfig() async {
     final p = await prefs;
@@ -166,6 +170,24 @@ class PrefsService {
       try {
         final decoded = jsonDecode(uclResultsRaw) as List<dynamic>;
         recentUclResults = decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      } catch (_) {}
+    }
+
+    final faCupResultsRaw = p.getString(_keyCareerRecentFaCupResults);
+    List<Map<String, dynamic>> recentFaCupResults = [];
+    if (faCupResultsRaw != null) {
+      try {
+        final decoded = jsonDecode(faCupResultsRaw) as List<dynamic>;
+        recentFaCupResults = decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      } catch (_) {}
+    }
+
+    final carabaoResultsRaw = p.getString(_keyCareerRecentCarabaoResults);
+    List<Map<String, dynamic>> recentCarabaoResults = [];
+    if (carabaoResultsRaw != null) {
+      try {
+        final decoded = jsonDecode(carabaoResultsRaw) as List<dynamic>;
+        recentCarabaoResults = decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
       } catch (_) {}
     }
 
@@ -210,6 +232,22 @@ class PrefsService {
     if (uclRaw != null) {
       try {
         uclTournament = Map<String, dynamic>.from(jsonDecode(uclRaw) as Map);
+      } catch (_) {}
+    }
+
+    final faCupRaw = p.getString(_keyCareerFaCupTournament);
+    Map<String, dynamic>? faCupTournament;
+    if (faCupRaw != null) {
+      try {
+        faCupTournament = Map<String, dynamic>.from(jsonDecode(faCupRaw) as Map);
+      } catch (_) {}
+    }
+
+    final carabaoRaw = p.getString(_keyCareerCarabaoCupTournament);
+    Map<String, dynamic>? carabaoCupTournament;
+    if (carabaoRaw != null) {
+      try {
+        carabaoCupTournament = Map<String, dynamic>.from(jsonDecode(carabaoRaw) as Map);
       } catch (_) {}
     }
 
@@ -284,6 +322,10 @@ class PrefsService {
       'leagueClubRatingTotals': leagueClubRatingTotals,
       'leagueClubRatingCounts': leagueClubRatingCounts,
       'recentUclResults': recentUclResults,
+      'faCupTournament': faCupTournament,
+      'carabaoCupTournament': carabaoCupTournament,
+      'recentFaCupResults': recentFaCupResults,
+      'recentCarabaoResults': recentCarabaoResults,
     };
   }
 
@@ -302,11 +344,15 @@ class PrefsService {
     Map<String, Map<String, int>>? playerStats,
     List<Map<String, dynamic>>? recentResults,
     List<Map<String, dynamic>>? recentUclResults,
+    List<Map<String, dynamic>>? recentFaCupResults,
+    List<Map<String, dynamic>>? recentCarabaoResults,
     Map<String, Map<String, dynamic>>? leagueScorers,
     List<Map<String, dynamic>>? leagueTable,
     Map<int, List<Map<String, dynamic>>>? seasonResults,
     String? formationId,
     Map<String, dynamic>? uclTournament,
+    Map<String, dynamic>? faCupTournament,
+    Map<String, dynamic>? carabaoCupTournament,
     Map<String, int>? playerAssists,
     Map<String, int>? leagueAssists,
     Map<String, int>? leagueCleanSheets,
@@ -335,6 +381,12 @@ class PrefsService {
     if (recentUclResults != null) {
       await p.setString(_keyCareerRecentUclResults, jsonEncode(recentUclResults));
     }
+    if (recentFaCupResults != null) {
+      await p.setString(_keyCareerRecentFaCupResults, jsonEncode(recentFaCupResults));
+    }
+    if (recentCarabaoResults != null) {
+      await p.setString(_keyCareerRecentCarabaoResults, jsonEncode(recentCarabaoResults));
+    }
     if (leagueScorers != null) {
       await p.setString(_keyCareerLeagueScorers, jsonEncode(leagueScorers));
     }
@@ -350,6 +402,12 @@ class PrefsService {
     }
     if (uclTournament != null) {
       await p.setString(_keyCareerUclTournament, jsonEncode(uclTournament));
+    }
+    if (faCupTournament != null) {
+      await p.setString(_keyCareerFaCupTournament, jsonEncode(faCupTournament));
+    }
+    if (carabaoCupTournament != null) {
+      await p.setString(_keyCareerCarabaoCupTournament, jsonEncode(carabaoCupTournament));
     }
     if (playerAssists != null) {
       await p.setString(_keyCareerPlayerAssists, jsonEncode(playerAssists));
@@ -387,11 +445,15 @@ class PrefsService {
     await p.remove(_keyCareerPlayerStats);
     await p.remove(_keyCareerRecentResults);
     await p.remove(_keyCareerRecentUclResults);
+    await p.remove(_keyCareerRecentFaCupResults);
+    await p.remove(_keyCareerRecentCarabaoResults);
     await p.remove(_keyCareerLeagueScorers);
     await p.remove(_keyCareerLeagueTable);
     await p.remove(_keyCareerSeasonResults);
     await p.remove(_keyCareerFormationId);
     await p.remove(_keyCareerUclTournament);
+    await p.remove(_keyCareerFaCupTournament);
+    await p.remove(_keyCareerCarabaoCupTournament);
     await p.remove(_keyCareerPlayerAssists);
     await p.remove(_keyCareerPlayerRatingsTotal);
     await p.remove(_keyCareerPlayerRatingsCount);

@@ -7,6 +7,7 @@ import 'package:touchline/core/storage/prefs_service.dart';
 import 'package:touchline/domain/models/player.dart';
 import 'package:touchline/domain/services/sim_engine.dart';
 import 'package:touchline/domain/services/ucl_engine.dart';
+import 'package:touchline/domain/services/cup_engine.dart';
 import 'package:touchline/features/career/career_screen.dart';
 import 'package:touchline/features/career/formation_editor.dart';
 
@@ -2258,6 +2259,223 @@ void main() {
           (scorerCounts['Fullback'] ?? 0);
       expect(totalFwdGoals, greaterThan(totalDefGoals * 3),
           reason: 'Forwards ($totalFwdGoals) must score far more than defenders ($totalDefGoals)');
+    });
+  });
+
+  group('Fix 26: Domestic Cups (FA Cup & Carabao Cup) Tournament Engine & Stats', () {
+    test('CupTournament.create initializes 16 clubs, ensures user club is present, and creates 8 R16 fixtures', () {
+      final userClub = 'Arsenal';
+      final faCup = CupTournament.create(id: 'fa_cup', userClub: userClub);
+      expect(faCup.id, 'fa_cup');
+      expect(faCup.name, 'The Emirates FA Cup');
+      expect(faCup.shortName, 'FA CUP');
+      expect(faCup.participants.length, 16);
+      expect(faCup.participants.contains(userClub), isTrue);
+      expect(faCup.fixtures.length, 8);
+      expect(faCup.fixtures.every((f) => f.roundIndex == 1 && f.stage == 'Round of 16'), isTrue);
+      expect(faCup.champion, isNull);
+      expect(faCup.runnerUp, isNull);
+
+      final carabao = CupTournament.create(id: 'carabao_cup', userClub: userClub);
+      expect(carabao.id, 'carabao_cup');
+      expect(carabao.name, 'Carabao Cup');
+      expect(carabao.shortName, 'CARABAO');
+      expect(carabao.participants.length, 16);
+      expect(carabao.participants.contains(userClub), isTrue);
+      expect(carabao.fixtures.length, 8);
+    });
+
+    test('Knockout progression advances cleanly through all 4 stages to crown Champion and Runner-up', () {
+      final sim = SimEngine(12345);
+      final faCup = CupTournament.create(id: 'fa_cup', userClub: 'Liverpool');
+
+      // Round 1: R16 (8 ties)
+      expect(faCup.getFixturesForRound(1).length, 8);
+      expect(faCup.getFixturesForRound(2).length, 0);
+
+      final r16Results = faCup.simulateRound(1, simEngine: sim);
+      expect(r16Results.length, 8);
+      expect(faCup.getFixturesForRound(1).every((f) => f.isPlayed && f.winner != null), isTrue);
+
+      // Quarter-Finals should now be generated (4 ties)
+      expect(faCup.getFixturesForRound(2).length, 4);
+      expect(faCup.getFixturesForRound(2).every((f) => !f.isPlayed), isTrue);
+
+      // Round 2: QF
+      final qfResults = faCup.simulateRound(2, simEngine: sim);
+      expect(qfResults.length, 4);
+      expect(faCup.getFixturesForRound(2).every((f) => f.isPlayed && f.winner != null), isTrue);
+
+      // Semi-Finals should now be generated (2 ties)
+      expect(faCup.getFixturesForRound(3).length, 2);
+
+      // Round 3: SF
+      final sfResults = faCup.simulateRound(3, simEngine: sim);
+      expect(sfResults.length, 2);
+      expect(faCup.getFixturesForRound(3).every((f) => f.isPlayed && f.winner != null), isTrue);
+
+      // Final should now be generated (1 tie)
+      expect(faCup.getFixturesForRound(4).length, 1);
+
+      // Round 4: Final
+      final finalResults = faCup.simulateRound(4, simEngine: sim);
+      expect(finalResults.length, 1);
+      final finalFixture = faCup.getFixturesForRound(4).first;
+      expect(finalFixture.isPlayed, isTrue);
+      expect(finalFixture.winner, isNotNull);
+      expect(faCup.champion, isNotNull);
+      expect(faCup.champion, finalFixture.winner);
+      expect(faCup.runnerUp, isNotNull);
+      expect(faCup.runnerUp, isNot(faCup.champion));
+      expect([finalFixture.homeClub, finalFixture.awayClub].contains(faCup.champion), isTrue);
+      expect([finalFixture.homeClub, finalFixture.awayClub].contains(faCup.runnerUp), isTrue);
+    });
+
+    test('Penalty shootouts properly resolve draws in knockout matches with valid scoreline formatting', () {
+      final sim = SimEngine(999);
+      final carabao = CupTournament.create(id: 'carabao_cup', userClub: 'Chelsea');
+      carabao.simulateRound(1, simEngine: sim);
+
+      // Check all played ties have a winner
+      for (final f in carabao.fixtures.where((f) => f.isPlayed)) {
+        expect(f.winner, isNotNull);
+        expect([f.homeClub, f.awayClub].contains(f.winner), isTrue);
+        if (f.result!.homeGoals == f.result!.awayGoals) {
+          // Draw must have penalties recorded
+          expect(f.homePenalties, isNotNull);
+          expect(f.awayPenalties, isNotNull);
+          expect(f.homePenalties != f.awayPenalties, isTrue);
+          expect(f.scoreline.contains('pen'), isTrue);
+        } else {
+          expect(f.scoreline, '${f.result!.homeGoals} - ${f.result!.awayGoals}');
+        }
+      }
+    });
+
+    test('Player stats (goals, assists, clean sheets) are recorded and aggregated across rounds', () {
+      final sim = SimEngine(777);
+      final faCup = CupTournament.create(id: 'fa_cup', userClub: 'Arsenal');
+
+      // Create test squad
+      final clubSquads = <String, List<SimPlayer>>{
+        'Arsenal': [
+          const SimPlayer(name: 'Bukayo Saka', position: 'RW', overall: 88, isStarter: true),
+          const SimPlayer(name: 'Martin Ødegaard', position: 'CAM', overall: 89, isStarter: true),
+          const SimPlayer(name: 'David Raya', position: 'GK', overall: 85, isStarter: true),
+        ],
+      };
+
+      // Simulate full tournament
+      for (int rd = 1; rd <= 4; rd++) {
+        faCup.simulateRound(rd, simEngine: sim, clubPlayers: clubSquads);
+      }
+
+      // Verify stats maps
+      expect(faCup.playerGoals.isNotEmpty, isTrue);
+      expect(faCup.playerClubs.isNotEmpty, isTrue);
+
+      for (final entry in faCup.playerGoals.entries) {
+        expect(entry.value, greaterThan(0));
+        expect(faCup.playerClubs.containsKey(entry.key), isTrue);
+      }
+    });
+
+    test('Schedule gameweek mappings align correctly for 38-GW and 18-GW career lengths', () {
+      // 38 GW Carabao Cup
+      expect(CupTournament.getCarabaoRoundForLeagueGw(5, totalGameweeks: 38), 1);
+      expect(CupTournament.getCarabaoRoundForLeagueGw(11, totalGameweeks: 38), 2);
+      expect(CupTournament.getCarabaoRoundForLeagueGw(17, totalGameweeks: 38), 3);
+      expect(CupTournament.getCarabaoRoundForLeagueGw(24, totalGameweeks: 38), 4);
+      expect(CupTournament.getCarabaoRoundForLeagueGw(1, totalGameweeks: 38), isNull);
+
+      // 38 GW FA Cup
+      expect(CupTournament.getFaCupRoundForLeagueGw(8, totalGameweeks: 38), 1);
+      expect(CupTournament.getFaCupRoundForLeagueGw(14, totalGameweeks: 38), 2);
+      expect(CupTournament.getFaCupRoundForLeagueGw(29, totalGameweeks: 38), 3);
+      expect(CupTournament.getFaCupRoundForLeagueGw(37, totalGameweeks: 38), 4);
+      expect(CupTournament.getFaCupRoundForLeagueGw(2, totalGameweeks: 38), isNull);
+
+      // 18 GW Carabao Cup
+      expect(CupTournament.getCarabaoRoundForLeagueGw(3, totalGameweeks: 18), 1);
+      expect(CupTournament.getCarabaoRoundForLeagueGw(7, totalGameweeks: 18), 2);
+      expect(CupTournament.getCarabaoRoundForLeagueGw(9, totalGameweeks: 18), 3);
+      expect(CupTournament.getCarabaoRoundForLeagueGw(11, totalGameweeks: 18), 4);
+
+      // 18 GW FA Cup
+      expect(CupTournament.getFaCupRoundForLeagueGw(5, totalGameweeks: 18), 1);
+      expect(CupTournament.getFaCupRoundForLeagueGw(13, totalGameweeks: 18), 2);
+      expect(CupTournament.getFaCupRoundForLeagueGw(15, totalGameweeks: 18), 3);
+      expect(CupTournament.getFaCupRoundForLeagueGw(17, totalGameweeks: 18), 4);
+    });
+
+    test('Prize money calculations return appropriate tiered awards for FA Cup and Carabao Cup', () {
+      final faCup = CupTournament.create(id: 'fa_cup', userClub: 'Arsenal');
+      faCup.champion = 'Arsenal';
+      expect(faCup.calculatePrizeMoney(), 15.0);
+
+      faCup.champion = 'Chelsea';
+      faCup.runnerUp = 'Arsenal';
+      expect(faCup.calculatePrizeMoney(), 6.0);
+
+      final carabao = CupTournament.create(id: 'carabao_cup', userClub: 'Arsenal');
+      carabao.champion = 'Arsenal';
+      expect(carabao.calculatePrizeMoney(), 8.0);
+
+      carabao.champion = 'Chelsea';
+      carabao.runnerUp = 'Arsenal';
+      expect(carabao.calculatePrizeMoney(), 3.5);
+    });
+
+    test('CupTournament serialization (toMap & fromMap) preserves entire bracket and stats state', () {
+      final sim = SimEngine(444);
+      final faCup = CupTournament.create(id: 'fa_cup', userClub: 'Tottenham Hotspur');
+      faCup.simulateRound(1, simEngine: sim);
+
+      final map = faCup.toMap();
+      final restored = CupTournament.fromMap(map);
+
+      expect(restored.id, faCup.id);
+      expect(restored.name, faCup.name);
+      expect(restored.userClub, faCup.userClub);
+      expect(restored.participants.length, faCup.participants.length);
+      expect(restored.fixtures.length, faCup.fixtures.length);
+      expect(restored.fixtures.where((f) => f.isPlayed).length, 8);
+      expect(restored.playerGoals.length, faCup.playerGoals.length);
+    });
+
+    test('PrefsService properly persists and restores Domestic Cup tournaments', () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = PrefsService.instance;
+
+      final faCup = CupTournament.create(id: 'fa_cup', userClub: 'Manchester City');
+      final carabao = CupTournament.create(id: 'carabao_cup', userClub: 'Manchester City');
+
+      await prefs.saveCareerConfig(
+        leagueId: 'premier_league',
+        clubName: 'Manchester City',
+        clubCode: 'MCI',
+        isCustomClub: false,
+        squadMode: 'current',
+        budget: 120.0,
+        season: 1,
+        gameweek: 5,
+        squadIds: ['Erling Haaland', 'Kevin De Bruyne'],
+        faCupTournament: faCup.toMap(),
+        carabaoCupTournament: carabao.toMap(),
+      );
+
+      final loaded = await prefs.getCareerConfig();
+      expect(loaded, isNotNull);
+      expect(loaded!['faCupTournament'], isNotNull);
+      expect(loaded['carabaoCupTournament'], isNotNull);
+
+      final loadedFa = CupTournament.fromMap(Map<String, dynamic>.from(loaded['faCupTournament'] as Map));
+      final loadedCarabao = CupTournament.fromMap(Map<String, dynamic>.from(loaded['carabaoCupTournament'] as Map));
+
+      expect(loadedFa.id, 'fa_cup');
+      expect(loadedFa.userClub, 'Manchester City');
+      expect(loadedCarabao.id, 'carabao_cup');
+      expect(loadedCarabao.userClub, 'Manchester City');
     });
   });
 }

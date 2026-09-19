@@ -21,6 +21,7 @@ import 'season_schedule_sheet.dart';
 import 'formation_editor.dart';
 import 'match_detail_sheet.dart';
 import '../../domain/services/ucl_engine.dart';
+import '../../domain/services/cup_engine.dart';
 
 class LeagueDefinition {
   final String id;
@@ -497,6 +498,14 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
   UclTournament? _uclTournament;
   final List<MatchResult> _recentUclResults = [];
 
+  // Domestic Cup Competitions: FA Cup & Carabao Cup (Fix 26 / User Fix 4)
+  CupTournament? _faCupTournament;
+  CupTournament? _carabaoCupTournament;
+  final List<MatchResult> _recentFaCupResults = [];
+  final List<MatchResult> _recentCarabaoResults = [];
+  int _cupSelectedId = 0; // 0: FA Cup, 1: Carabao Cup
+  int _cupViewTab = 0; // 0: Brackets, 1: Scorelines, 2: Scorers, 3: Assists, 4: Clean Sheets
+
   // Career save specific player statistics (Issue #7, #8 & #11)
   final Map<String, int> _playerAppearances = {};
   final Map<String, int> _playerGoals = {};
@@ -515,9 +524,9 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
   final Map<String, double> _leagueClubRatingTotals = {};
   final Map<String, int> _leagueClubRatingCounts = {};
   int _teamStatsSortIndex = 0; // 0: Attack (GF), 1: Defense (GA), 2: Clean Sheets (CS), 3: Rating (AVG), 4: Goal Diff (GD)
-  int _standingsTab = 0; // 0: League Table, 1: Team Stats, 2: Golden Boot, 3: Assists, 4: Clean Sheets, 5: UCL
+  int _standingsTab = 0; // 0: League Table, 1: Team Stats, 2: Golden Boot, 3: Assists, 4: Clean Sheets, 5: UCL, 6: Domestic Cups
   int _uclViewTab = 0; // 0: Groups, 1: Knockouts, 2: Scorers, 3: Assists, 4: Clean Sheets, 5: All Scorelines
-  int _resultsCompTab = 0; // 0: Domestic League matches, 1: UEFA Champions League matches
+  int _resultsCompTab = 0; // 0: Domestic League, 1: UCL Midweek, 2: FA Cup, 3: Carabao Cup
 
   late SimEngine _sim;
 
@@ -702,6 +711,25 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       _leagueClubs.add(_userClub);
     }
 
+    // Restore or create Domestic Cup Tournaments (Fix 26 / User Fix 4)
+    final cupClubs = List<String>.from(_leagueClubs);
+    for (final c in CupTournament.kDefaultEnglishCupClubs) {
+      if (!cupClubs.contains(c)) cupClubs.add(c);
+    }
+    if (saved['faCupTournament'] != null) {
+      try {
+        _faCupTournament = CupTournament.fromMap(Map<String, dynamic>.from(saved['faCupTournament'] as Map));
+      } catch (_) {}
+    }
+    _faCupTournament ??= CupTournament.create(id: 'fa_cup', userClub: _userClub, poolClubs: cupClubs);
+
+    if (saved['carabaoCupTournament'] != null) {
+      try {
+        _carabaoCupTournament = CupTournament.fromMap(Map<String, dynamic>.from(saved['carabaoCupTournament'] as Map));
+      } catch (_) {}
+    }
+    _carabaoCupTournament ??= CupTournament.create(id: 'carabao_cup', userClub: _userClub, poolClubs: cupClubs);
+
     final db = await DatabaseService.instance.database;
 
     // Load saved squad players
@@ -779,6 +807,38 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       } catch (_) {}
     }
     _recentUclResults.sort((a, b) {
+      final aUser = a.homeClub == _userClub || a.awayClub == _userClub;
+      final bUser = b.homeClub == _userClub || b.awayClub == _userClub;
+      if (aUser && !bUser) return -1;
+      if (!aUser && bUser) return 1;
+      return 0;
+    });
+
+    // Restore recent FA Cup results (Fix 26 / User Fix 4)
+    _recentFaCupResults.clear();
+    final savedFa = saved['recentFaCupResults'] as List<dynamic>? ?? [];
+    for (final r in savedFa) {
+      try {
+        _recentFaCupResults.add(MatchResult.fromMap(Map<String, dynamic>.from(r as Map)));
+      } catch (_) {}
+    }
+    _recentFaCupResults.sort((a, b) {
+      final aUser = a.homeClub == _userClub || a.awayClub == _userClub;
+      final bUser = b.homeClub == _userClub || b.awayClub == _userClub;
+      if (aUser && !bUser) return -1;
+      if (!aUser && bUser) return 1;
+      return 0;
+    });
+
+    // Restore recent Carabao Cup results (Fix 26 / User Fix 4)
+    _recentCarabaoResults.clear();
+    final savedCarabao = saved['recentCarabaoResults'] as List<dynamic>? ?? [];
+    for (final r in savedCarabao) {
+      try {
+        _recentCarabaoResults.add(MatchResult.fromMap(Map<String, dynamic>.from(r as Map)));
+      } catch (_) {}
+    }
+    _recentCarabaoResults.sort((a, b) {
       final aUser = a.homeClub == _userClub || a.awayClub == _userClub;
       final bUser = b.homeClub == _userClub || b.awayClub == _userClub;
       if (aUser && !bUser) return -1;
@@ -1264,8 +1324,18 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     _careerPrizeMoneyEarned = 0.0;
     _formationId = '4-3-3';
     _uclTournament = UclTournament.create(userClub: clubName);
+
+    // Initialize Domestic Cups (Fix 26 / User Fix 4)
+    final cupPool = List<String>.from(_leagueClubs);
+    for (final c in CupTournament.kDefaultEnglishCupClubs) {
+      if (!cupPool.contains(c)) cupPool.add(c);
+    }
+    _faCupTournament = CupTournament.create(id: 'fa_cup', userClub: clubName, poolClubs: cupPool);
+    _carabaoCupTournament = CupTournament.create(id: 'carabao_cup', userClub: clubName, poolClubs: cupPool);
     _recentResults.clear();
     _recentUclResults.clear();
+    _recentFaCupResults.clear();
+    _recentCarabaoResults.clear();
     _playerAppearances.clear();
     _playerGoals.clear();
     _playerAssists.clear();
@@ -1544,6 +1614,105 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       });
     } else {
       _recentUclResults.clear();
+    }
+
+    // Carabao Cup Simulation (Fix 26 / User Fix 4)
+    final carabaoRd = CupTournament.getCarabaoRoundForLeagueGw(_currentGameweek, totalGameweeks: _totalGameweeks);
+    if (carabaoRd != null && _carabaoCupTournament != null) {
+      _recentCarabaoResults.clear();
+      final cResults = _carabaoCupTournament!.simulateRound(
+        carabaoRd,
+        simEngine: _sim,
+        clubPlayers: _aiClubPlayers,
+        totalGameweeks: _totalGameweeks,
+      );
+      _recentCarabaoResults.addAll(cResults);
+      _recentCarabaoResults.sort((a, b) {
+        final aUser = a.homeClub == _userClub || a.awayClub == _userClub;
+        final bUser = b.homeClub == _userClub || b.awayClub == _userClub;
+        if (aUser && !bUser) return -1;
+        if (!aUser && bUser) return 1;
+        return 0;
+      });
+
+      // Track user player appearances and stats for Carabao Cup
+      final userCarabaoMatch = _recentCarabaoResults.where((m) => m.homeClub == _userClub || m.awayClub == _userClub).firstOrNull;
+      if (userCarabaoMatch != null) {
+        final isHomeC = userCarabaoMatch.homeClub == _userClub;
+        final cUserGoals = isHomeC ? userCarabaoMatch.homeGoalEvents : userCarabaoMatch.awayGoalEvents;
+        for (final ev in cUserGoals) {
+          _playerGoals[ev.scorerName] = (_playerGoals[ev.scorerName] ?? 0) + 1;
+          if (ev.assisterName != null && ev.assisterName!.isNotEmpty) {
+            _playerAssists[ev.assisterName!] = (_playerAssists[ev.assisterName!] ?? 0) + 1;
+          }
+        }
+        final cRatings = isHomeC ? userCarabaoMatch.homePlayerRatings : userCarabaoMatch.awayPlayerRatings;
+        cRatings.forEach((pName, rating) {
+          _playerRatingsTotal[pName] = (_playerRatingsTotal[pName] ?? 0.0) + rating;
+          _playerRatingsCount[pName] = (_playerRatingsCount[pName] ?? 0) + 1;
+        });
+        final cConceded = isHomeC ? userCarabaoMatch.awayGoals : userCarabaoMatch.homeGoals;
+        if (cConceded == 0 && _userSquad.isNotEmpty) {
+          for (final p in _userSquad.take(11)) {
+            if (p.primaryPosition == 'GK' || const ['CB', 'LB', 'RB', 'LWB', 'RWB'].contains(p.primaryPosition)) {
+              _playerCleanSheets[p.name] = (_playerCleanSheets[p.name] ?? 0) + 1;
+            }
+          }
+        }
+      }
+    } else {
+      _recentCarabaoResults.clear();
+    }
+
+    // FA Cup Simulation (Fix 26 / User Fix 4)
+    final faRd = CupTournament.getFaCupRoundForLeagueGw(_currentGameweek, totalGameweeks: _totalGameweeks);
+    if (faRd != null && _faCupTournament != null) {
+      _recentFaCupResults.clear();
+      final fResults = _faCupTournament!.simulateRound(
+        faRd,
+        simEngine: _sim,
+        clubPlayers: _aiClubPlayers,
+        totalGameweeks: _totalGameweeks,
+      );
+      _recentFaCupResults.addAll(fResults);
+      _recentFaCupResults.sort((a, b) {
+        final aUser = a.homeClub == _userClub || a.awayClub == _userClub;
+        final bUser = b.homeClub == _userClub || b.awayClub == _userClub;
+        if (aUser && !bUser) return -1;
+        if (!aUser && bUser) return 1;
+        return 0;
+      });
+
+      // Track user player appearances and stats for FA Cup
+      final userFaMatch = _recentFaCupResults.where((m) => m.homeClub == _userClub || m.awayClub == _userClub).firstOrNull;
+      if (userFaMatch != null) {
+        final isHomeF = userFaMatch.homeClub == _userClub;
+        final fUserGoals = isHomeF ? userFaMatch.homeGoalEvents : userFaMatch.awayGoalEvents;
+        for (final ev in fUserGoals) {
+          _playerGoals[ev.scorerName] = (_playerGoals[ev.scorerName] ?? 0) + 1;
+          if (ev.assisterName != null && ev.assisterName!.isNotEmpty) {
+            _playerAssists[ev.assisterName!] = (_playerAssists[ev.assisterName!] ?? 0) + 1;
+          }
+        }
+        final fRatings = isHomeF ? userFaMatch.homePlayerRatings : userFaMatch.awayPlayerRatings;
+        fRatings.forEach((pName, rating) {
+          _playerRatingsTotal[pName] = (_playerRatingsTotal[pName] ?? 0.0) + rating;
+          _playerRatingsCount[pName] = (_playerRatingsCount[pName] ?? 0) + 1;
+        });
+        final fConceded = isHomeF ? userFaMatch.awayGoals : userFaMatch.homeGoals;
+        if (fConceded == 0 && _userSquad.isNotEmpty) {
+          for (final p in _userSquad.take(11)) {
+            if (p.primaryPosition == 'GK' || const ['CB', 'LB', 'RB', 'LWB', 'RWB'].contains(p.primaryPosition)) {
+              _playerCleanSheets[p.name] = (_playerCleanSheets[p.name] ?? 0) + 1;
+            }
+          }
+        }
+      }
+    } else {
+      _recentFaCupResults.clear();
+    }
+
+    if (_recentUclResults.isEmpty && _recentFaCupResults.isEmpty && _recentCarabaoResults.isEmpty) {
       _resultsCompTab = 0;
     }
 
@@ -1563,7 +1732,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       justUnlockedWinter = true;
     }
 
-    // Performance-based matchday prize money (Issue #12)
+    // Performance-based matchday prize money (Issue #12 & Fix 26)
     final userWon = (userMatch.homeClub == _userClub && userMatch.homeGoals > userMatch.awayGoals) ||
         (userMatch.awayClub == _userClub && userMatch.awayGoals > userMatch.homeGoals);
     final userDrew = (userMatch.homeClub == _userClub || userMatch.awayClub == _userClub) &&
@@ -1577,6 +1746,20 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         ((userUclMatch.homeClub == _userClub && userUclMatch.homeGoals > userUclMatch.awayGoals) ||
             (userUclMatch.awayClub == _userClub && userUclMatch.awayGoals > userUclMatch.homeGoals));
     final userDrewUcl = userUclMatch != null && (userUclMatch.homeGoals == userUclMatch.awayGoals);
+
+    // Carabao Cup win bonus
+    final userCarabaoMatches = _recentCarabaoResults.where((m) => m.homeClub == _userClub || m.awayClub == _userClub);
+    final userCarabaoMatch = userCarabaoMatches.isNotEmpty ? userCarabaoMatches.first : null;
+    final userWonCarabao = userCarabaoMatch != null &&
+        ((userCarabaoMatch.homeClub == _userClub && userCarabaoMatch.homeGoals > userCarabaoMatch.awayGoals) ||
+            (userCarabaoMatch.awayClub == _userClub && userCarabaoMatch.awayGoals > userCarabaoMatch.homeGoals));
+
+    // FA Cup win bonus
+    final userFaMatches = _recentFaCupResults.where((m) => m.homeClub == _userClub || m.awayClub == _userClub);
+    final userFaMatch = userFaMatches.isNotEmpty ? userFaMatches.first : null;
+    final userWonFa = userFaMatch != null &&
+        ((userFaMatch.homeClub == _userClub && userFaMatch.homeGoals > userFaMatch.awayGoals) ||
+            (userFaMatch.awayClub == _userClub && userFaMatch.awayGoals > userFaMatch.homeGoals));
 
     double matchBonus = 0.0;
     final bonusReasons = <String>[];
@@ -1594,6 +1777,16 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     } else if (userDrewUcl) {
       matchBonus += 1.0;
       bonusReasons.add('UCL Draw (+£1.0M)');
+    }
+
+    if (userWonCarabao) {
+      matchBonus += 1.0;
+      bonusReasons.add('Carabao Cup Win (+£1.0M)');
+    }
+
+    if (userWonFa) {
+      matchBonus += 1.5;
+      bonusReasons.add('FA Cup Win (+£1.5M)');
     }
 
     if (matchBonus > 0) {
@@ -1668,6 +1861,8 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     final tableList = _leagueTable.map((t) => t.toMap()).toList();
     final recentList = _recentResults.map((m) => m.toMap()).toList();
     final recentUclList = _recentUclResults.map((m) => m.toMap()).toList();
+    final recentFaList = _recentFaCupResults.map((m) => m.toMap()).toList();
+    final recentCarabaoList = _recentCarabaoResults.map((m) => m.toMap()).toList();
     final squadNames = _userSquad.map((p) => p.name).toList();
     final archiveMap = _seasonResultsArchive.map(
       (k, v) => MapEntry(k, v.map((m) => m.toMap()).toList()),
@@ -1689,11 +1884,15 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       playerStats: statsMap,
       recentResults: recentList,
       recentUclResults: recentUclList,
+      recentFaCupResults: recentFaList,
+      recentCarabaoResults: recentCarabaoList,
       leagueScorers: leagueScorersMap,
       leagueTable: tableList,
       seasonResults: archiveMap,
       formationId: _formationId,
       uclTournament: _uclTournament?.toMap(),
+      faCupTournament: _faCupTournament?.toMap(),
+      carabaoCupTournament: _carabaoCupTournament?.toMap(),
       playerAssists: _playerAssists,
       leagueAssists: _leaguePlayerAssists,
       leagueCleanSheets: _leagueClubCleanSheets,
@@ -1717,11 +1916,15 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       'playerStats': statsMap,
       'recentResults': recentList,
       'recentUclResults': recentUclList,
+      'recentFaCupResults': recentFaList,
+      'recentCarabaoResults': recentCarabaoList,
       'leagueScorers': leagueScorersMap,
       'leagueTable': tableList,
       'seasonResults': archiveMap,
       'formationId': _formationId,
       'uclTournament': _uclTournament?.toMap(),
+      'faCupTournament': _faCupTournament?.toMap(),
+      'carabaoCupTournament': _carabaoCupTournament?.toMap(),
       'playerAssists': _playerAssists,
       'playerRatingsTotal': _playerRatingsTotal,
       'playerRatingsCount': _playerRatingsCount,
@@ -2380,7 +2583,9 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     final totalTeams = _leagueClubs.isNotEmpty ? _leagueClubs.length : (_leagueTable.isNotEmpty ? _leagueTable.length : 20);
     final leagueMeritBonus = calculateLeagueMeritPrizeMoney(pos, totalTeams);
     final uclPrizeBonus = calculateUclPrizeMoney(_uclTournament, _userClub);
-    final totalSeasonPrize = leagueMeritBonus + uclPrizeBonus;
+    final faCupPrizeBonus = _faCupTournament?.calculatePrizeMoney() ?? 0.0;
+    final carabaoPrizeBonus = _carabaoCupTournament?.calculatePrizeMoney() ?? 0.0;
+    final totalSeasonPrize = leagueMeritBonus + uclPrizeBonus + faCupPrizeBonus + carabaoPrizeBonus;
 
     showDialog(
       context: context,
@@ -2449,6 +2654,32 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                           ],
                         ),
                       ],
+                      if (faCupPrizeBonus > 0) ...[
+                        const SizedBox(height: 6),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text('FA Cup Campaign Prize:', style: AppTypography.caption(ink)),
+                            Text(
+                              '+£${faCupPrizeBonus.toStringAsFixed(1)}M',
+                              style: AppTypography.statNumber(AppPalette.green, fontSize: 13, weight: FontWeight.w700),
+                            ),
+                          ],
+                        ),
+                      ],
+                      if (carabaoPrizeBonus > 0) ...[
+                        const SizedBox(height: 6),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text('Carabao Cup Prize:', style: AppTypography.caption(ink)),
+                            Text(
+                              '+£${carabaoPrizeBonus.toStringAsFixed(1)}M',
+                              style: AppTypography.statNumber(AppPalette.green, fontSize: 13, weight: FontWeight.w700),
+                            ),
+                          ],
+                        ),
+                      ],
                       const SizedBox(height: 8),
                       Divider(color: theme.dividerColor, height: 1),
                       const SizedBox(height: 8),
@@ -2497,8 +2728,16 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                   _winterBudgetAwarded = false;
                   _seasonSchedule = generateSeasonSchedule(_leagueClubs, totalGameweeks: _totalGameweeks);
                   _uclTournament = UclTournament.create(userClub: _userClub);
+                  final cupPool = List<String>.from(_leagueClubs);
+                  for (final c in CupTournament.kDefaultEnglishCupClubs) {
+                    if (!cupPool.contains(c)) cupPool.add(c);
+                  }
+                  _faCupTournament = CupTournament.create(id: 'fa_cup', userClub: _userClub, poolClubs: cupPool);
+                  _carabaoCupTournament = CupTournament.create(id: 'carabao_cup', userClub: _userClub, poolClubs: cupPool);
                   _recentResults.clear();
                   _recentUclResults.clear();
+                  _recentFaCupResults.clear();
+                  _recentCarabaoResults.clear();
                   _playerAppearances.clear();
                   _playerGoals.clear();
                   _playerAssists.clear();
@@ -3694,8 +3933,8 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
 
             const SizedBox(height: 16),
 
-            // Unified Matchday Scoreboard & Report (Issue #7, Fix 23 & Fix 24 / User Fix 1 & 2)
-            if (_recentResults.isNotEmpty || _recentUclResults.isNotEmpty) ...[
+            // Unified Matchday Scoreboard & Report (Issue #7, Fix 23, Fix 24 & Fix 26 / User Fix 1, 2 & 4)
+            if (_recentResults.isNotEmpty || _recentUclResults.isNotEmpty || _recentFaCupResults.isNotEmpty || _recentCarabaoResults.isNotEmpty) ...[
               Builder(
                 builder: (context) {
                   final displayLeague = List<MatchResult>.from(_recentResults)..sort((a, b) {
@@ -3714,6 +3953,22 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                     return 0;
                   });
 
+                  final displayFa = List<MatchResult>.from(_recentFaCupResults)..sort((a, b) {
+                    final aUser = a.homeClub == _userClub || a.awayClub == _userClub;
+                    final bUser = b.homeClub == _userClub || b.awayClub == _userClub;
+                    if (aUser && !bUser) return -1;
+                    if (!aUser && bUser) return 1;
+                    return 0;
+                  });
+
+                  final displayCarabao = List<MatchResult>.from(_recentCarabaoResults)..sort((a, b) {
+                    final aUser = a.homeClub == _userClub || a.awayClub == _userClub;
+                    final bUser = b.homeClub == _userClub || b.awayClub == _userClub;
+                    if (aUser && !bUser) return -1;
+                    if (!aUser && bUser) return 1;
+                    return 0;
+                  });
+
                   // User matches
                   final userLeagueMatches = displayLeague.where(
                     (m) => m.homeClub == _userClub || m.awayClub == _userClub,
@@ -3725,10 +3980,38 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                   );
                   final userUclMatch = userUclMatches.isNotEmpty ? userUclMatches.first : null;
 
+                  final userFaMatches = displayFa.where(
+                    (m) => m.homeClub == _userClub || m.awayClub == _userClub,
+                  );
+                  final userFaMatch = userFaMatches.isNotEmpty ? userFaMatches.first : null;
+
+                  final userCarabaoMatches = displayCarabao.where(
+                    (m) => m.homeClub == _userClub || m.awayClub == _userClub,
+                  );
+                  final userCarabaoMatch = userCarabaoMatches.isNotEmpty ? userCarabaoMatches.first : null;
+
                   final hasUcl = _recentUclResults.isNotEmpty;
-                  final showUclList = hasUcl && _resultsCompTab == 1;
-                  final currentResultsList = showUclList ? displayUcl : displayLeague;
-                  final currentCompName = showUclList ? 'UEFA CHAMPIONS LEAGUE' : activeLeague.name.toUpperCase();
+                  final hasFa = _recentFaCupResults.isNotEmpty;
+                  final hasCarabao = _recentCarabaoResults.isNotEmpty;
+                  final hasMultipleComps = hasUcl || hasFa || hasCarabao;
+
+                  List<MatchResult> currentResultsList = displayLeague;
+                  String currentCompName = activeLeague.name.toUpperCase();
+                  MatchResult? currentUserMatch = userLeagueMatch;
+
+                  if (_resultsCompTab == 1 && hasUcl) {
+                    currentResultsList = displayUcl;
+                    currentCompName = 'UEFA CHAMPIONS LEAGUE';
+                    currentUserMatch = userUclMatch;
+                  } else if (_resultsCompTab == 2 && hasFa) {
+                    currentResultsList = displayFa;
+                    currentCompName = 'THE EMIRATES FA CUP';
+                    currentUserMatch = userFaMatch;
+                  } else if (_resultsCompTab == 3 && hasCarabao) {
+                    currentResultsList = displayCarabao;
+                    currentCompName = 'CARABAO CUP';
+                    currentUserMatch = userCarabaoMatch;
+                  }
 
                   return AlmanacCard(
                     sectionTitle: 'MATCHDAY ${_currentGameweek - 1} SCOREBOARD & REPORT',
@@ -3736,7 +4019,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
                         // 1. TOP SPOTLIGHT: YOUR CLUB MATCHES THIS MATCHDAY
-                        if (userLeagueMatch != null || userUclMatch != null) ...[
+                        if (userLeagueMatch != null || userUclMatch != null || userFaMatch != null || userCarabaoMatch != null) ...[
                           if (userLeagueMatch != null) ...[
                             _buildMatchResultTile(
                               m: userLeagueMatch,
@@ -3758,11 +4041,33 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                               competitionName: 'UEFA CHAMPIONS LEAGUE',
                             ),
                           ],
+                          if (userFaMatch != null) ...[
+                            const SizedBox(height: 8),
+                            _buildMatchResultTile(
+                              m: userFaMatch,
+                              isDark: isDark,
+                              ink: ink,
+                              inkMuted: inkMuted,
+                              activeLeague: activeLeague,
+                              competitionName: 'THE EMIRATES FA CUP',
+                            ),
+                          ],
+                          if (userCarabaoMatch != null) ...[
+                            const SizedBox(height: 8),
+                            _buildMatchResultTile(
+                              m: userCarabaoMatch,
+                              isDark: isDark,
+                              ink: ink,
+                              inkMuted: inkMuted,
+                              activeLeague: activeLeague,
+                              competitionName: 'CARABAO CUP',
+                            ),
+                          ],
                           const SizedBox(height: 12),
                         ],
 
-                        // 2. COMPETITION TOGGLE SWITCHER (if UCL matches were played this gameweek)
-                        if (hasUcl) ...[
+                        // 2. COMPETITION TOGGLE SWITCHER (if cup/continental matches were played this gameweek)
+                        if (hasMultipleComps) ...[
                           Container(
                             padding: const EdgeInsets.all(3),
                             margin: const EdgeInsets.only(bottom: 12),
@@ -3770,10 +4075,11 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                               color: isDark ? Colors.white.withValues(alpha: 0.06) : Colors.black.withValues(alpha: 0.05),
                               borderRadius: BorderRadius.circular(8),
                             ),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: _buildResultCompTabButton(
+                            child: SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: Row(
+                                children: [
+                                  _buildResultCompTabButton(
                                     tabIndex: 0,
                                     label: '${activeLeague.clubCodes[_userClub] ?? 'LEAGUE'} (${displayLeague.length})',
                                     icon: Icons.sports_soccer_rounded,
@@ -3781,20 +4087,42 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                                     ink: ink,
                                     inkMuted: inkMuted,
                                   ),
-                                ),
-                                const SizedBox(width: 4),
-                                Expanded(
-                                  child: _buildResultCompTabButton(
-                                    tabIndex: 1,
-                                    label: 'UCL MIDWEEK (${displayUcl.length})',
-                                    icon: Icons.star_rounded,
-                                    isDark: isDark,
-                                    ink: ink,
-                                    inkMuted: inkMuted,
-                                    isUcl: true,
-                                  ),
-                                ),
-                              ],
+                                  if (hasUcl) ...[
+                                    const SizedBox(width: 4),
+                                    _buildResultCompTabButton(
+                                      tabIndex: 1,
+                                      label: 'UCL (${displayUcl.length})',
+                                      icon: Icons.star_rounded,
+                                      isDark: isDark,
+                                      ink: ink,
+                                      inkMuted: inkMuted,
+                                      isUcl: true,
+                                    ),
+                                  ],
+                                  if (hasFa) ...[
+                                    const SizedBox(width: 4),
+                                    _buildResultCompTabButton(
+                                      tabIndex: 2,
+                                      label: 'FA CUP (${displayFa.length})',
+                                      icon: Icons.workspace_premium_rounded,
+                                      isDark: isDark,
+                                      ink: ink,
+                                      inkMuted: inkMuted,
+                                    ),
+                                  ],
+                                  if (hasCarabao) ...[
+                                    const SizedBox(width: 4),
+                                    _buildResultCompTabButton(
+                                      tabIndex: 3,
+                                      label: 'CARABAO (${displayCarabao.length})',
+                                      icon: Icons.shield_rounded,
+                                      isDark: isDark,
+                                      ink: ink,
+                                      inkMuted: inkMuted,
+                                    ),
+                                  ],
+                                ],
+                              ),
                             ),
                           ),
                         ],
@@ -3814,7 +4142,13 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                               Padding(
                                 padding: const EdgeInsets.symmetric(horizontal: 10),
                                 child: Text(
-                                  showUclList ? 'ALL UCL MIDWEEK FIXTURES' : 'AROUND THE LEAGUE',
+                                  _resultsCompTab == 1 && hasUcl
+                                      ? 'ALL UCL MIDWEEK FIXTURES'
+                                      : _resultsCompTab == 2 && hasFa
+                                          ? 'ALL FA CUP FIXTURES'
+                                          : _resultsCompTab == 3 && hasCarabao
+                                              ? 'ALL CARABAO CUP FIXTURES'
+                                              : 'AROUND THE LEAGUE',
                                   style: AppTypography.caption(inkMuted).copyWith(
                                     fontSize: 9.5,
                                     fontWeight: FontWeight.w700,
@@ -3836,8 +4170,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
 
                         // 4. FIXTURES LIST (excluding already featured user match)
                         for (int idx = 0; idx < currentResultsList.length; idx++) ...[
-                          if ((showUclList && currentResultsList[idx] == userUclMatch) ||
-                              (!showUclList && currentResultsList[idx] == userLeagueMatch))
+                          if (currentResultsList[idx] == currentUserMatch)
                             const SizedBox.shrink()
                           else ...[
                             if (idx > 0)
@@ -3876,10 +4209,12 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                               ? 'PLAYMAKER • LEAGUE TOP ASSISTS'
                               : _standingsTab == 4
                                   ? 'CLEAN SHEETS • DEFENSIVE SHUTOUTS'
-                                  : 'UEFA CHAMPIONS LEAGUE 2026/27',
+                                  : _standingsTab == 5
+                                      ? 'UEFA CHAMPIONS LEAGUE 2026/27'
+                                      : 'DOMESTIC CUPS • BRACKETS & STATS',
               child: Column(
                 children: [
-                  // 6-Tab selector
+                  // 7-Tab selector
                   Container(
                     padding: const EdgeInsets.all(3),
                     margin: const EdgeInsets.only(bottom: 12),
@@ -3940,6 +4275,15 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                             tabIndex: 5,
                             label: 'UCL',
                             icon: Icons.emoji_events_rounded,
+                            isDark: isDark,
+                            ink: ink,
+                            inkMuted: inkMuted,
+                          ),
+                          const SizedBox(width: 4),
+                          _buildStandingsTabButton(
+                            tabIndex: 6,
+                            label: 'CUPS',
+                            icon: Icons.workspace_premium_rounded,
                             isDark: isDark,
                             ink: ink,
                             inkMuted: inkMuted,
@@ -4017,8 +4361,10 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                     _buildAssistsTable(isDark, ink, inkMuted, activeLeague)
                   else if (_standingsTab == 4)
                     _buildCleanSheetsTable(isDark, ink, inkMuted, activeLeague)
+                  else if (_standingsTab == 5)
+                    _buildUclStandings(isDark, ink, inkMuted, activeLeague)
                   else
-                    _buildUclStandings(isDark, ink, inkMuted, activeLeague),
+                    _buildCupsStandings(isDark, ink, inkMuted, activeLeague),
                 ],
               ),
             ),
@@ -7055,6 +7401,800 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
           ),
         ),
       ),
+    );
+  }
+
+  // =========================================================================
+  // DOMESTIC CUP COMPETITIONS UI: FA CUP & CARABAO CUP (Fix 26 / User Fix 4)
+  // =========================================================================
+
+  Widget _buildCupsStandings(bool isDark, Color ink, Color inkMuted, LeagueDefinition activeLeague) {
+    final faCup = _faCupTournament;
+    final carabao = _carabaoCupTournament;
+
+    if (faCup == null && carabao == null) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 24),
+        child: Column(
+          children: [
+            const Icon(Icons.workspace_premium_rounded, size: 36, color: AppPalette.gold),
+            const SizedBox(height: 8),
+            Text('Domestic Cup Competitions', style: AppTypography.titleMedium(ink)),
+            const SizedBox(height: 4),
+            Text('Tournaments have not been initialized for this career.', style: AppTypography.caption(inkMuted)),
+          ],
+        ),
+      );
+    }
+
+    final currentCup = (_cupSelectedId == 0 ? faCup : carabao) ?? faCup ?? carabao!;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Cup Switcher: [ 🏆 THE EMIRATES FA CUP ] vs [ 🎖️ CARABAO CUP ]
+        Container(
+          padding: const EdgeInsets.all(3),
+          margin: const EdgeInsets.only(bottom: 12),
+          decoration: BoxDecoration(
+            color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: _buildCupSelectorButton(
+                  cupIndex: 0,
+                  label: 'THE EMIRATES FA CUP',
+                  icon: Icons.workspace_premium_rounded,
+                  isDark: isDark,
+                  ink: ink,
+                  inkMuted: inkMuted,
+                ),
+              ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: _buildCupSelectorButton(
+                  cupIndex: 1,
+                  label: 'CARABAO CUP',
+                  icon: Icons.shield_rounded,
+                  isDark: isDark,
+                  ink: ink,
+                  inkMuted: inkMuted,
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // Champion Banner if this cup has finished
+        if (currentCup.champion != null) ...[
+          Container(
+            padding: const EdgeInsets.all(12),
+            margin: const EdgeInsets.only(bottom: 12),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  AppPalette.gold.withValues(alpha: 0.25),
+                  _cupSelectedId == 0
+                      ? const Color(0xFF8B0000).withValues(alpha: 0.35)
+                      : const Color(0xFF006400).withValues(alpha: 0.35),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: AppPalette.gold, width: 1.5),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.emoji_events_rounded, color: AppPalette.gold, size: 28),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '${currentCup.name.toUpperCase()} 2026/27 WINNER',
+                        style: AppTypography.caption(AppPalette.gold).copyWith(fontWeight: FontWeight.w900, letterSpacing: 1),
+                      ),
+                      Text(
+                        currentCup.champion!,
+                        style: AppTypography.titleMedium(ink).copyWith(fontWeight: FontWeight.w900),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+
+        // Sub-tabs: 0: BRACKETS, 1: SCORELINES, 2: SCORERS, 3: ASSISTS, 4: CLEAN SHEETS
+        Container(
+          padding: const EdgeInsets.all(2),
+          margin: const EdgeInsets.only(bottom: 12),
+          decoration: BoxDecoration(
+            color: isDark ? Colors.white.withValues(alpha: 0.04) : Colors.black.withValues(alpha: 0.04),
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _buildCupSubTab(0, 'BRACKETS', isDark, ink, inkMuted),
+                const SizedBox(width: 4),
+                _buildCupSubTab(1, 'SCORELINES', isDark, ink, inkMuted),
+                const SizedBox(width: 4),
+                _buildCupSubTab(2, 'SCORERS', isDark, ink, inkMuted),
+                const SizedBox(width: 4),
+                _buildCupSubTab(3, 'ASSISTS', isDark, ink, inkMuted),
+                const SizedBox(width: 4),
+                _buildCupSubTab(4, 'CLEAN SHEETS', isDark, ink, inkMuted),
+              ],
+            ),
+          ),
+        ),
+
+        if (_cupViewTab == 0)
+          _buildCupBracketsView(currentCup, isDark, ink, inkMuted, activeLeague)
+        else if (_cupViewTab == 1)
+          _buildCupScorelinesView(currentCup, isDark, ink, inkMuted, activeLeague)
+        else if (_cupViewTab == 2)
+          _buildCupScorersView(currentCup, isDark, ink, inkMuted)
+        else if (_cupViewTab == 3)
+          _buildCupAssistsView(currentCup, isDark, ink, inkMuted)
+        else
+          _buildCupCleanSheetsView(currentCup, isDark, ink, inkMuted),
+      ],
+    );
+  }
+
+  Widget _buildCupSelectorButton({
+    required int cupIndex,
+    required String label,
+    required IconData icon,
+    required bool isDark,
+    required Color ink,
+    required Color inkMuted,
+  }) {
+    final isSelected = _cupSelectedId == cupIndex;
+    return InkWell(
+      onTap: () => setState(() => _cupSelectedId = cupIndex),
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? (isDark ? AppPalette.darkSurfaceRaised : AppPalette.lightSurfaceRaised)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(6),
+          boxShadow: isSelected
+              ? [BoxShadow(color: Colors.black.withValues(alpha: 0.12), blurRadius: 4)]
+              : null,
+          border: isSelected
+              ? Border.all(color: AppPalette.gold.withValues(alpha: 0.5), width: 1)
+              : null,
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: 14,
+              color: isSelected ? AppPalette.gold : inkMuted,
+            ),
+            const SizedBox(width: 6),
+            Flexible(
+              child: Text(
+                label,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontFamily: AppTypography.fontFamily,
+                  fontSize: 10.5,
+                  fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                  color: isSelected ? AppPalette.gold : inkMuted,
+                  letterSpacing: 0.4,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCupSubTab(int tabIndex, String label, bool isDark, Color ink, Color inkMuted) {
+    final isSelected = _cupViewTab == tabIndex;
+    return InkWell(
+      onTap: () => setState(() => _cupViewTab = tabIndex),
+      borderRadius: BorderRadius.circular(5),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? (isDark ? AppPalette.darkSurfaceRaised : AppPalette.lightSurfaceRaised)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(5),
+          boxShadow: isSelected
+              ? [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 3)]
+              : null,
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          label,
+          style: TextStyle(
+            fontFamily: AppTypography.fontFamily,
+            fontSize: 10,
+            fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+            color: isSelected ? AppPalette.gold : inkMuted,
+            letterSpacing: 0.5,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCupBracketsView(
+    CupTournament cup,
+    bool isDark,
+    Color ink,
+    Color inkMuted,
+    LeagueDefinition activeLeague,
+  ) {
+    final r16 = cup.getFixturesForRound(1);
+    final qf = cup.getFixturesForRound(2);
+    final sf = cup.getFixturesForRound(3);
+    final fn = cup.getFixturesForRound(4);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (r16.isNotEmpty) ...[
+          _buildStageHeader('ROUND OF 16 (${r16.where((f) => f.isPlayed).length}/8 PLAYED)'),
+          ...r16.map((f) => _buildCupFixtureTile(f, isDark, ink, inkMuted, activeLeague)),
+          const SizedBox(height: 12),
+        ],
+
+        if (qf.isNotEmpty) ...[
+          _buildStageHeader('QUARTER-FINALS (${qf.where((f) => f.isPlayed).length}/4 PLAYED)'),
+          ...qf.map((f) => _buildCupFixtureTile(f, isDark, ink, inkMuted, activeLeague)),
+          const SizedBox(height: 12),
+        ],
+
+        if (sf.isNotEmpty) ...[
+          _buildStageHeader('SEMI-FINALS (${sf.where((f) => f.isPlayed).length}/2 PLAYED)'),
+          ...sf.map((f) => _buildCupFixtureTile(f, isDark, ink, inkMuted, activeLeague)),
+          const SizedBox(height: 12),
+        ],
+
+        if (fn.isNotEmpty) ...[
+          _buildStageHeader('THE FINAL • WEMBLEY STADIUM'),
+          ...fn.map((f) => _buildCupFixtureTile(f, isDark, ink, inkMuted, activeLeague, isFinal: true)),
+        ] else ...[
+          _buildStageHeader('THE FINAL • WEMBLEY STADIUM'),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: isDark ? AppPalette.darkCard : AppPalette.lightCard,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Theme.of(context).dividerColor),
+            ),
+            child: Center(
+              child: Text(
+                'Finalists will be decided after the Semi-Finals',
+                style: AppTypography.caption(inkMuted).copyWith(fontStyle: FontStyle.italic),
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildCupFixtureTile(
+    CupFixture f,
+    bool isDark,
+    Color ink,
+    Color inkMuted,
+    LeagueDefinition activeLeague, {
+    bool isFinal = false,
+  }) {
+    final isUserMatch = f.homeClub == _userClub || f.awayClub == _userClub;
+    final homeCode = activeLeague.clubCodes[f.homeClub] ??
+        (f.homeClub == _userClub ? _userClubCode : (f.homeClub.length >= 3 ? f.homeClub.substring(0, 3).toUpperCase() : f.homeClub.toUpperCase()));
+    final awayCode = activeLeague.clubCodes[f.awayClub] ??
+        (f.awayClub == _userClub ? _userClubCode : (f.awayClub.length >= 3 ? f.awayClub.substring(0, 3).toUpperCase() : f.awayClub.toUpperCase()));
+
+    final homeWon = f.winner == f.homeClub;
+    final awayWon = f.winner == f.awayClub;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      decoration: BoxDecoration(
+        color: isUserMatch
+            ? AppPalette.gold.withValues(alpha: 0.08)
+            : (isDark ? AppPalette.darkCard : AppPalette.lightCard),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: isUserMatch
+              ? AppPalette.gold.withValues(alpha: 0.6)
+              : (f.winner != null ? AppPalette.gold.withValues(alpha: 0.25) : Theme.of(context).dividerColor.withValues(alpha: 0.4)),
+          width: isUserMatch ? 1.5 : 1,
+        ),
+      ),
+      child: InkWell(
+        onTap: f.isPlayed && f.result != null
+            ? () {
+                MatchDetailSheet.show(
+                  context,
+                  f.result!,
+                  competitionName: '${f.cupName.toUpperCase()} • ${f.stage.toUpperCase()}',
+                );
+              }
+            : null,
+        borderRadius: BorderRadius.circular(8),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          child: Column(
+            children: [
+              if (isUserMatch) ...[
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    const Icon(Icons.star_rounded, size: 11, color: AppPalette.gold),
+                    const SizedBox(width: 4),
+                    Text(
+                      'YOUR CLUB TIE',
+                      style: AppTypography.caption(AppPalette.gold).copyWith(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.6,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+              ],
+              Row(
+                children: [
+                  Expanded(
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            f.homeClub,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.end,
+                            style: TextStyle(
+                              fontFamily: AppTypography.fontFamily,
+                              fontSize: 12,
+                              fontWeight: homeWon ? FontWeight.w800 : (f.homeClub == _userClub ? FontWeight.w700 : FontWeight.w500),
+                              color: homeWon ? AppPalette.gold : (f.homeClub == _userClub ? AppPalette.gold : ink),
+                            ),
+                          ),
+                        ),
+                        if (homeWon) ...[
+                          const SizedBox(width: 3),
+                          const Icon(Icons.check_circle_rounded, size: 11, color: AppPalette.green),
+                        ],
+                        const SizedBox(width: 6),
+                        ClubBadge(code: homeCode, size: 18),
+                      ],
+                    ),
+                  ),
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 8),
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: isDark ? AppPalette.darkSurfaceRaised : AppPalette.lightSurfaceRaised,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      f.isPlayed ? f.scoreline : 'GW ${f.matchday}',
+                      style: TextStyle(
+                        fontFamily: AppTypography.fontFamily,
+                        fontSize: f.isPlayed ? 11.5 : 9.5,
+                        fontWeight: FontWeight.w800,
+                        color: f.isPlayed ? ink : inkMuted,
+                      ),
+                    ),
+                  ),
+                  Expanded(
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.start,
+                      children: [
+                        ClubBadge(code: awayCode, size: 18),
+                        const SizedBox(width: 6),
+                        if (awayWon) ...[
+                          const Icon(Icons.check_circle_rounded, size: 11, color: AppPalette.green),
+                          const SizedBox(width: 3),
+                        ],
+                        Flexible(
+                          child: Text(
+                            f.awayClub,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.start,
+                            style: TextStyle(
+                              fontFamily: AppTypography.fontFamily,
+                              fontSize: 12,
+                              fontWeight: awayWon ? FontWeight.w800 : (f.awayClub == _userClub ? FontWeight.w700 : FontWeight.w500),
+                              color: awayWon ? AppPalette.gold : (f.awayClub == _userClub ? AppPalette.gold : ink),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (f.isPlayed) ...[
+                    const SizedBox(width: 4),
+                    Icon(Icons.chevron_right_rounded, size: 14, color: inkMuted),
+                  ],
+                ],
+              ),
+              if (f.isPlayed && f.result != null) ...[
+                Builder(builder: (context) {
+                  final allGoals = [...f.result!.homeGoalEvents, ...f.result!.awayGoalEvents];
+                  if (allGoals.isEmpty) return const SizedBox.shrink();
+                  return Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      allGoals
+                          .map((e) => "${e.scorerName} ${e.minute}'")
+                          .take(3)
+                          .join(', '),
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTypography.caption(inkMuted).copyWith(fontSize: 9.5),
+                    ),
+                  );
+                }),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCupScorelinesView(
+    CupTournament cup,
+    bool isDark,
+    Color ink,
+    Color inkMuted,
+    LeagueDefinition activeLeague,
+  ) {
+    final playedFixtures = cup.fixtures.where((f) => f.isPlayed && f.result != null).toList().reversed.toList();
+
+    if (playedFixtures.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 24),
+        child: Column(
+          children: [
+            const Icon(Icons.sports_soccer_rounded, size: 36, color: AppPalette.gold),
+            const SizedBox(height: 8),
+            Text('No ${cup.shortName} Matches Played Yet', style: AppTypography.titleMedium(ink)),
+            const SizedBox(height: 4),
+            Text('Scorelines will appear here as cup rounds are simulated.', textAlign: TextAlign.center, style: AppTypography.caption(inkMuted)),
+          ],
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: playedFixtures.map((f) => _buildCupFixtureTile(f, isDark, ink, inkMuted, activeLeague)).toList(),
+    );
+  }
+
+  Widget _buildCupScorersView(CupTournament cup, bool isDark, Color ink, Color inkMuted) {
+    final entries = cup.playerGoals.entries.toList();
+    entries.sort((a, b) => b.value.compareTo(a.value));
+
+    if (entries.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 24),
+        child: Column(
+          children: [
+            const Icon(Icons.sports_soccer_rounded, size: 36, color: AppPalette.gold),
+            const SizedBox(height: 8),
+            Text('No ${cup.shortName} Goals Yet', style: AppTypography.titleMedium(ink)),
+            const SizedBox(height: 4),
+            Text('Scorers will appear as cup rounds are simulated.', style: AppTypography.caption(inkMuted)),
+          ],
+        ),
+      );
+    }
+
+    final topScorers = entries.take(10).toList();
+
+    return Table(
+      columnWidths: const {
+        0: FlexColumnWidth(0.7),
+        1: FlexColumnWidth(3.2),
+        2: FlexColumnWidth(2.2),
+        3: FlexColumnWidth(1.0),
+      },
+      defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+      children: [
+        TableRow(
+          children: [
+            _headerCell('#', inkMuted),
+            _headerCell('PLAYER', inkMuted, align: TextAlign.left),
+            _headerCell('CLUB', inkMuted, align: TextAlign.left),
+            _headerCell('GLS', inkMuted),
+          ],
+        ),
+        ...List.generate(topScorers.length, (idx) {
+          final scorer = topScorers[idx];
+          final playerName = scorer.key;
+          final goals = scorer.value;
+          final clubName = cup.playerClubs[playerName] ?? '';
+          final isUserPlayer = _userSquad.any((p) => p.name == playerName);
+          final clubCode = clubName.length >= 3 ? clubName.substring(0, 3).toUpperCase() : clubName.toUpperCase();
+
+          Widget rankWidget;
+          if (idx == 0) {
+            rankWidget = const Center(child: Text('🥇', style: TextStyle(fontSize: 14)));
+          } else if (idx == 1) {
+            rankWidget = const Center(child: Text('🥈', style: TextStyle(fontSize: 14)));
+          } else if (idx == 2) {
+            rankWidget = const Center(child: Text('🥉', style: TextStyle(fontSize: 14)));
+          } else {
+            rankWidget = _cell('${idx + 1}', inkMuted);
+          }
+
+          return TableRow(
+            decoration: isUserPlayer ? BoxDecoration(color: AppPalette.gold.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(4)) : null,
+            children: [
+              rankWidget,
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        playerName,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontFamily: AppTypography.fontFamily,
+                          fontSize: 12.5,
+                          fontWeight: isUserPlayer ? FontWeight.w800 : FontWeight.w600,
+                          color: isUserPlayer ? AppPalette.gold : ink,
+                        ),
+                      ),
+                    ),
+                    if (isUserPlayer) ...[
+                      const SizedBox(width: 4),
+                      const Icon(Icons.star_rounded, size: 13, color: AppPalette.gold),
+                    ],
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Row(
+                  children: [
+                    ClubBadge(code: clubCode, size: 18),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        clubName,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontFamily: AppTypography.fontFamily,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w500,
+                          color: inkMuted,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              _cell('$goals', isUserPlayer ? AppPalette.gold : ink, isBold: true),
+            ],
+          );
+        }),
+      ],
+    );
+  }
+
+  Widget _buildCupAssistsView(CupTournament cup, bool isDark, Color ink, Color inkMuted) {
+    final entries = cup.playerAssists.entries.toList();
+    entries.sort((a, b) => b.value.compareTo(a.value));
+
+    if (entries.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 24),
+        child: Column(
+          children: [
+            const Icon(Icons.auto_awesome_rounded, size: 36, color: AppPalette.gold),
+            const SizedBox(height: 8),
+            Text('No ${cup.shortName} Assists Yet', style: AppTypography.titleMedium(ink)),
+            const SizedBox(height: 4),
+            Text('Playmakers will appear as cup rounds are simulated.', style: AppTypography.caption(inkMuted)),
+          ],
+        ),
+      );
+    }
+
+    final topAssisters = entries.take(10).toList();
+
+    return Table(
+      columnWidths: const {
+        0: FlexColumnWidth(0.7),
+        1: FlexColumnWidth(3.2),
+        2: FlexColumnWidth(2.2),
+        3: FlexColumnWidth(1.0),
+      },
+      defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+      children: [
+        TableRow(
+          children: [
+            _headerCell('#', inkMuted),
+            _headerCell('PLAYER', inkMuted, align: TextAlign.left),
+            _headerCell('CLUB', inkMuted, align: TextAlign.left),
+            _headerCell('AST', inkMuted),
+          ],
+        ),
+        ...List.generate(topAssisters.length, (idx) {
+          final assister = topAssisters[idx];
+          final playerName = assister.key;
+          final assists = assister.value;
+          final clubName = cup.playerClubs[playerName] ?? '';
+          final isUserPlayer = _userSquad.any((p) => p.name == playerName);
+          final clubCode = clubName.length >= 3 ? clubName.substring(0, 3).toUpperCase() : clubName.toUpperCase();
+
+          Widget rankWidget;
+          if (idx == 0) {
+            rankWidget = const Center(child: Text('🥇', style: TextStyle(fontSize: 14)));
+          } else if (idx == 1) {
+            rankWidget = const Center(child: Text('🥈', style: TextStyle(fontSize: 14)));
+          } else if (idx == 2) {
+            rankWidget = const Center(child: Text('🥉', style: TextStyle(fontSize: 14)));
+          } else {
+            rankWidget = _cell('${idx + 1}', inkMuted);
+          }
+
+          return TableRow(
+            decoration: isUserPlayer ? BoxDecoration(color: AppPalette.gold.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(4)) : null,
+            children: [
+              rankWidget,
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        playerName,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontFamily: AppTypography.fontFamily,
+                          fontSize: 12.5,
+                          fontWeight: isUserPlayer ? FontWeight.w800 : FontWeight.w600,
+                          color: isUserPlayer ? AppPalette.gold : ink,
+                        ),
+                      ),
+                    ),
+                    if (isUserPlayer) ...[
+                      const SizedBox(width: 4),
+                      const Icon(Icons.star_rounded, size: 13, color: AppPalette.gold),
+                    ],
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Row(
+                  children: [
+                    ClubBadge(code: clubCode, size: 18),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        clubName,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontFamily: AppTypography.fontFamily,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w500,
+                          color: inkMuted,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              _cell('$assists', isUserPlayer ? AppPalette.gold : ink, isBold: true),
+            ],
+          );
+        }),
+      ],
+    );
+  }
+
+  Widget _buildCupCleanSheetsView(CupTournament cup, bool isDark, Color ink, Color inkMuted) {
+    final entries = cup.playerCleanSheets.entries.toList();
+    entries.sort((a, b) => b.value.compareTo(a.value));
+
+    if (entries.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 24),
+        child: Column(
+          children: [
+            const Icon(Icons.shield_rounded, size: 36, color: AppPalette.gold),
+            const SizedBox(height: 8),
+            Text('No ${cup.shortName} Clean Sheets Yet', style: AppTypography.titleMedium(ink)),
+            const SizedBox(height: 4),
+            Text('Defensive shutouts will appear as cup rounds are simulated.', style: AppTypography.caption(inkMuted)),
+          ],
+        ),
+      );
+    }
+
+    final topCleanSheets = entries.take(10).toList();
+
+    return Table(
+      columnWidths: const {
+        0: FlexColumnWidth(0.7),
+        1: FlexColumnWidth(4.5),
+        2: FlexColumnWidth(1.2),
+      },
+      defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+      children: [
+        TableRow(
+          children: [
+            _headerCell('#', inkMuted),
+            _headerCell('CLUB', inkMuted, align: TextAlign.left),
+            _headerCell('CS', inkMuted),
+          ],
+        ),
+        ...List.generate(topCleanSheets.length, (idx) {
+          final item = topCleanSheets[idx];
+          final clubName = item.key;
+          final cleanSheets = item.value;
+          final isUserClub = clubName == _userClub;
+          final clubCode = clubName.length >= 3 ? clubName.substring(0, 3).toUpperCase() : clubName.toUpperCase();
+
+          Widget rankWidget;
+          if (idx == 0) {
+            rankWidget = const Center(child: Text('🥇', style: TextStyle(fontSize: 14)));
+          } else if (idx == 1) {
+            rankWidget = const Center(child: Text('🥈', style: TextStyle(fontSize: 14)));
+          } else if (idx == 2) {
+            rankWidget = const Center(child: Text('🥉', style: TextStyle(fontSize: 14)));
+          } else {
+            rankWidget = _cell('${idx + 1}', inkMuted);
+          }
+
+          return TableRow(
+            decoration: isUserClub ? BoxDecoration(color: AppPalette.gold.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(4)) : null,
+            children: [
+              rankWidget,
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                child: Row(
+                  children: [
+                    ClubBadge(code: clubCode, size: 18),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        clubName,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontFamily: AppTypography.fontFamily,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w500,
+                          color: isUserClub ? AppPalette.gold : inkMuted,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              _cell('$cleanSheets', isUserClub ? AppPalette.gold : ink, isBold: true),
+            ],
+          );
+        }),
+      ],
     );
   }
 }
