@@ -8,6 +8,7 @@ import 'package:touchline/domain/models/player.dart';
 import 'package:touchline/domain/services/sim_engine.dart';
 import 'package:touchline/domain/services/ucl_engine.dart';
 import 'package:touchline/domain/services/cup_engine.dart';
+import 'package:touchline/domain/services/player_growth_service.dart';
 import 'package:touchline/features/career/career_screen.dart';
 import 'package:touchline/features/career/formation_editor.dart';
 
@@ -2476,6 +2477,206 @@ void main() {
       expect(loadedFa.userClub, 'Manchester City');
       expect(loadedCarabao.id, 'carabao_cup');
       expect(loadedCarabao.userClub, 'Manchester City');
+    });
+  });
+
+  group('Fix 27: Dynamic Player Growth & Age 33+ Decline Engine', () {
+    Player createTestPlayer({
+      required String name,
+      required int overall,
+      required double age,
+      required double potential,
+      int pace = 75,
+      int shooting = 75,
+      int passing = 75,
+      int dribbling = 75,
+      int defending = 75,
+      int physicality = 75,
+      String position = 'CM',
+    }) {
+      return Player(
+        mode: 'current',
+        squadId: 'squad_1',
+        teamCode: 'MUN',
+        teamName: 'Manchester United',
+        season: 2024,
+        playerId: 'p_$name',
+        name: name,
+        overall: overall,
+        displayPosition: position,
+        primaryPosition: position,
+        allPositions: position,
+        age: age,
+        potential: potential,
+        pace: pace,
+        shooting: shooting,
+        passing: passing,
+        dribbling: dribbling,
+        defending: defending,
+        physicality: physicality,
+        isGoalkeeper: position == 'GK',
+      );
+    }
+
+    test('Youngster (age <= 23) with high FIFA potential experiences breakout development on great season', () {
+      final youngster = createTestPlayer(name: 'Kobbie Mainoo', overall: 76, age: 19, potential: 88);
+
+      final result = PlayerGrowthService.processSeasonGrowth(
+        player: youngster,
+        appearances: 18,
+        averageRating: 7.6,
+        goals: 6,
+        assists: 7,
+        cleanSheets: 0,
+      );
+
+      expect(result.oldAge, 19);
+      expect(result.newAge, 20);
+      expect(result.isGrowth, isTrue);
+      expect(result.delta, inInclusiveRange(2, 4));
+      expect(result.newOverall, youngster.overall + result.delta);
+      expect(result.player.overall, result.newOverall);
+      expect(result.player.age, 20.0);
+      expect(result.statusLabel, anyOf('EXPLOSIVE GROWTH', 'SOLID PROGRESS'));
+      expect(result.player.passing, greaterThan(youngster.passing));
+    });
+
+    test('Youngster reaching potential ceiling stops growing and does not exceed potential', () {
+      final peakedYoungster = createTestPlayer(name: 'Peaked Prodigy', overall: 87, age: 22, potential: 87);
+
+      final result = PlayerGrowthService.processSeasonGrowth(
+        player: peakedYoungster,
+        appearances: 25,
+        averageRating: 7.8,
+        goals: 12,
+        assists: 10,
+        cleanSheets: 0,
+      );
+
+      expect(result.newAge, 23);
+      expect(result.delta, 0);
+      expect(result.newOverall, 87);
+      expect(result.isUnchanged, isTrue);
+    });
+
+    test('Veterans (age >= 33) strictly suffer natural decline, never grow', () {
+      final veteranElite = createTestPlayer(name: 'Casemiro', overall: 85, age: 33, potential: 85);
+
+      // Excellent campaign softens decline to -1 OVR
+      final resultElite = PlayerGrowthService.processSeasonGrowth(
+        player: veteranElite,
+        appearances: 20,
+        averageRating: 7.5,
+        goals: 3,
+        assists: 4,
+        cleanSheets: 8,
+      );
+
+      expect(resultElite.oldAge, 33);
+      expect(resultElite.newAge, 34);
+      expect(resultElite.isDecline, isTrue);
+      expect(resultElite.delta, -1);
+      expect(resultElite.newOverall, 84);
+      expect(resultElite.statusLabel, contains('33+'));
+      expect(resultElite.player.pace, lessThanOrEqualTo(veteranElite.pace));
+
+      // Standard campaign at age 34 incurs -2 decline
+      final veteranStandard = createTestPlayer(name: 'Veteran Defender', overall: 83, age: 34, potential: 83);
+      final resultStandard = PlayerGrowthService.processSeasonGrowth(
+        player: veteranStandard,
+        appearances: 8,
+        averageRating: 6.7,
+        goals: 0,
+        assists: 1,
+        cleanSheets: 2,
+      );
+
+      expect(resultStandard.delta, -2);
+      expect(resultStandard.newOverall, 81);
+      expect(resultStandard.isDecline, isTrue);
+
+      // Poor campaign at age 35 incurs accelerated -3 decline
+      final veteranAging = createTestPlayer(name: 'Aging Veteran', overall: 80, age: 35, potential: 80);
+      final resultAging = PlayerGrowthService.processSeasonGrowth(
+        player: veteranAging,
+        appearances: 2,
+        averageRating: 5.4,
+        goals: 0,
+        assists: 0,
+        cleanSheets: 0,
+      );
+
+      expect(resultAging.delta, -3);
+      expect(resultAging.newOverall, 77);
+      expect(resultAging.isDecline, isTrue);
+    });
+
+    test('Veteran decline respects minimum rating floor of 68', () {
+      final lowVeteran = createTestPlayer(name: 'Old Pro', overall: 69, age: 36, potential: 69);
+
+      final result = PlayerGrowthService.processSeasonGrowth(
+        player: lowVeteran,
+        appearances: 1,
+        averageRating: 5.2,
+        goals: 0,
+        assists: 0,
+        cleanSheets: 0,
+      );
+
+      expect(result.newOverall, 68);
+      expect(result.delta, -1); // Clamped at 68 floor instead of dropping below
+    });
+
+    test('FIFA potential tier descriptions match age and potential brackets', () {
+      final special = createTestPlayer(name: 'Star', overall: 75, age: 20, potential: 91);
+      expect(PlayerGrowthService.getPotentialTierDescription(special), 'Has Potential to be Special');
+
+      final exciting = createTestPlayer(name: 'Talent', overall: 75, age: 21, potential: 87);
+      expect(PlayerGrowthService.getPotentialTierDescription(exciting), 'An Exciting Prospect');
+
+      final promising = createTestPlayer(name: 'Prospect', overall: 75, age: 22, potential: 83);
+      expect(PlayerGrowthService.getPotentialTierDescription(promising), 'Showing Great Potential');
+
+      final prime = createTestPlayer(name: 'Prime Star', overall: 86, age: 29, potential: 86);
+      expect(PlayerGrowthService.getPotentialTierDescription(prime), 'At Peak Prime');
+
+      final veteran = createTestPlayer(name: 'Veteran', overall: 82, age: 34, potential: 82);
+      expect(PlayerGrowthService.getPotentialTierDescription(veteran), 'Experienced Veteran');
+    });
+
+    test('PrefsService properly persists and restores dynamic playerRatingsOverride and playerAgesOverride', () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = PrefsService.instance;
+
+      final ratings = {'Kobbie Mainoo': 80, 'Casemiro': 83, 'Bruno Fernandes': 88};
+      final ages = {'Kobbie Mainoo': 20, 'Casemiro': 34, 'Bruno Fernandes': 31};
+
+      await prefs.saveCareerConfig(
+        leagueId: 'premier_league',
+        clubName: 'Manchester United',
+        clubCode: 'MUN',
+        isCustomClub: false,
+        squadMode: 'current',
+        playerRatingsOverride: ratings,
+        playerAgesOverride: ages,
+      );
+
+      final loaded = await prefs.getCareerConfig();
+      expect(loaded, isNotNull);
+      expect(loaded!['playerRatingsOverride'], isNotNull);
+      expect(loaded['playerAgesOverride'], isNotNull);
+
+      final loadedRatings = loaded['playerRatingsOverride'] as Map<String, int>;
+      final loadedAges = loaded['playerAgesOverride'] as Map<String, int>;
+
+      expect(loadedRatings['Kobbie Mainoo'], 80);
+      expect(loadedRatings['Casemiro'], 83);
+      expect(loadedAges['Kobbie Mainoo'], 20);
+      expect(loadedAges['Casemiro'], 34);
+
+      await prefs.clearCareerConfig();
+      final cleared = await prefs.getCareerConfig();
+      expect(cleared, isNull);
     });
   });
 }

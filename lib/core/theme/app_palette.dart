@@ -31,6 +31,7 @@ class AppPalette {
   static const Color goldDark = Color(0xFFB8860B);  // Gold for light mode
   static const Color green    = Color(0xFF2ECC71);  // Turf green — wins, correct
   static const Color red      = Color(0xFFE74C3C);  // Coral — losses, wrong
+  static const Color coral    = red;                // Coral red
   static const Color amber    = Color(0xFFF39C12);  // Warnings, draws, caution
   static const Color blue     = Color(0xFF3498DB);  // Info, stats, neutral
 

@@ -22,6 +22,7 @@ import 'formation_editor.dart';
 import 'match_detail_sheet.dart';
 import '../../domain/services/ucl_engine.dart';
 import '../../domain/services/cup_engine.dart';
+import '../../domain/services/player_growth_service.dart';
 
 class LeagueDefinition {
   final String id;
@@ -779,6 +780,36 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       }
       _userSquad = _sortSquadTactically(_userSquad);
       await _persistCareerState();
+    }
+
+    // Apply dynamic career growth and aging overrides (Fix 27 / User Fix 5)
+    final savedPlayerRatings = saved['playerRatingsOverride'] as Map<dynamic, dynamic>? ?? {};
+    final savedPlayerAges = saved['playerAgesOverride'] as Map<dynamic, dynamic>? ?? {};
+    if (savedPlayerRatings.isNotEmpty || savedPlayerAges.isNotEmpty) {
+      _userSquad = _userSquad.map((p) {
+        final keyLower = p.name.trim().toLowerCase();
+        int? dynamicRating;
+        int? dynamicAge;
+        for (final entry in savedPlayerRatings.entries) {
+          if (entry.key.toString().trim().toLowerCase() == keyLower) {
+            dynamicRating = (entry.value as num?)?.toInt();
+            break;
+          }
+        }
+        for (final entry in savedPlayerAges.entries) {
+          if (entry.key.toString().trim().toLowerCase() == keyLower) {
+            dynamicAge = (entry.value as num?)?.toInt();
+            break;
+          }
+        }
+        if (dynamicRating != null || dynamicAge != null) {
+          return p.copyWith(
+            overall: dynamicRating ?? p.overall,
+            age: dynamicAge?.toDouble() ?? p.age,
+          );
+        }
+        return p;
+      }).toList();
     }
 
     // Restore recent matchday results (Issue #7 & Fix 23)
@@ -1868,6 +1899,15 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       (k, v) => MapEntry(k, v.map((m) => m.toMap()).toList()),
     );
 
+    final ratingsOverride = <String, int>{};
+    final agesOverride = <String, int>{};
+    for (final p in _userSquad) {
+      ratingsOverride[p.name] = p.overall;
+      if (p.age != null) {
+        agesOverride[p.name] = p.age!.round();
+      }
+    }
+
     // 1. Save to SharedPreferences (fast local cache)
     await PrefsService.instance.saveCareerConfig(
       leagueId: _leagueId,
@@ -1899,6 +1939,8 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       prizeMoney: _careerPrizeMoneyEarned,
       leagueClubRatingTotals: _leagueClubRatingTotals,
       leagueClubRatingCounts: _leagueClubRatingCounts,
+      playerRatingsOverride: ratingsOverride,
+      playerAgesOverride: agesOverride,
     );
 
     final statePayload = <String, dynamic>{
@@ -1934,6 +1976,8 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       'prizeMoney': _careerPrizeMoneyEarned,
       'leagueClubRatingTotals': _leagueClubRatingTotals,
       'leagueClubRatingCounts': _leagueClubRatingCounts,
+      'playerRatingsOverride': ratingsOverride,
+      'playerAgesOverride': agesOverride,
     };
 
     // 2. Dual-layer persistence: SQLite touchline_save.db career_save table (Issue #10)
@@ -2587,8 +2631,31 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     final carabaoPrizeBonus = _carabaoCupTournament?.calculatePrizeMoney() ?? 0.0;
     final totalSeasonPrize = leagueMeritBonus + uclPrizeBonus + faCupPrizeBonus + carabaoPrizeBonus;
 
+    // Calculate dynamic growth and decline results for the entire squad (Fix 27 / User Fix 5)
+    final growthResults = <PlayerGrowthResult>[];
+    for (final p in _userSquad) {
+      final apps = _playerAppearances[p.name] ?? 0;
+      final goals = _playerGoals[p.name] ?? 0;
+      final assists = _playerAssists[p.name] ?? 0;
+      final cleanSheets = _playerCleanSheets[p.name] ?? 0;
+      final rTotal = _playerRatingsTotal[p.name] ?? 0.0;
+      final rCount = _playerRatingsCount[p.name] ?? 0;
+      final avgRating = rCount > 0 ? (rTotal / rCount) : 6.5;
+
+      final res = PlayerGrowthService.processSeasonGrowth(
+        player: p,
+        appearances: apps,
+        averageRating: avgRating,
+        goals: goals,
+        assists: assists,
+        cleanSheets: cleanSheets,
+      );
+      growthResults.add(res);
+    }
+
     showDialog(
       context: context,
+      barrierDismissible: false,
       builder: (ctx) {
         final theme = Theme.of(ctx);
         final ink = theme.colorScheme.onSurface;
@@ -2720,7 +2787,191 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
               style: FilledButton.styleFrom(backgroundColor: AppPalette.gold),
               onPressed: () {
                 Navigator.pop(ctx);
+                _showSquadDevelopmentDialog(growthResults, totalSeasonPrize);
+              },
+              child: const Text('Review Squad Development', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _showSquadDevelopmentDialog(List<PlayerGrowthResult> growthResults, double totalSeasonPrize) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        final ink = theme.colorScheme.onSurface;
+        final isDark = theme.brightness == Brightness.dark;
+        final border = isDark ? AppPalette.darkBorder : AppPalette.lightBorder;
+
+        final improvedCount = growthResults.where((r) => r.isGrowth).length;
+        final declinedCount = growthResults.where((r) => r.isDecline).length;
+        final stableCount = growthResults.where((r) => r.isUnchanged).length;
+
+        return AlertDialog(
+          backgroundColor: isDark ? AppPalette.darkSurface : AppPalette.lightSurface,
+          title: Row(
+            children: [
+              const Icon(Icons.trending_up_rounded, color: AppPalette.green, size: 28),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('SQUAD DEVELOPMENT', style: AppTypography.titleLarge(ink)),
+                    Text(
+                      'Annual player progression & veteran aging',
+                      style: AppTypography.caption(ink.withValues(alpha: 0.65)),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          content: SizedBox(
+            width: double.maxFinite,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.04),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: border),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      _buildGrowthStatSummary('⚡ Improved', '$improvedCount', AppPalette.green),
+                      _buildGrowthStatSummary('⏳ Stable', '$stableCount', AppPalette.gold),
+                      _buildGrowthStatSummary('🔻 Age 33+ Decline', '$declinedCount', AppPalette.coral),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Flexible(
+                  child: ListView.separated(
+                    shrinkWrap: true,
+                    itemCount: growthResults.length,
+                    separatorBuilder: (context, index) => Divider(color: border, height: 1),
+                    itemBuilder: (_, index) {
+                      final item = growthResults[index];
+                      final deltaColor = item.isGrowth
+                          ? AppPalette.green
+                          : (item.isDecline ? AppPalette.coral : ink.withValues(alpha: 0.5));
+                      final deltaText = item.isGrowth
+                          ? '+${item.delta}'
+                          : (item.isDecline ? '${item.delta}' : '=');
+
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: Row(
+                          children: [
+                            PlayerAvatar(name: item.player.name, size: 34),
+                            const SizedBox(width: 10),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Flexible(
+                                        child: Text(
+                                          item.player.name,
+                                          style: TextStyle(
+                                            fontFamily: AppTypography.fontFamily,
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w700,
+                                            color: ink,
+                                          ),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      PositionBadge(position: item.player.primaryPosition),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'Age ${item.oldAge} → ${item.newAge} • ${item.statusLabel}',
+                                    style: TextStyle(
+                                      fontFamily: AppTypography.fontFamily,
+                                      fontSize: 10.5,
+                                      color: deltaColor,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.end,
+                              children: [
+                                Row(
+                                  children: [
+                                    Text(
+                                      '${item.oldOverall}',
+                                      style: TextStyle(
+                                        fontFamily: AppTypography.fontFamily,
+                                        fontSize: 13,
+                                        color: ink.withValues(alpha: 0.6),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 3),
+                                    const Icon(Icons.arrow_forward_rounded, size: 11, color: AppPalette.gold),
+                                    const SizedBox(width: 3),
+                                    Text(
+                                      '${item.newOverall}',
+                                      style: TextStyle(
+                                        fontFamily: AppTypography.fontFamily,
+                                        fontSize: 13.5,
+                                        fontWeight: FontWeight.w800,
+                                        color: ink,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                Container(
+                                  margin: const EdgeInsets.only(top: 2),
+                                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                                  decoration: BoxDecoration(
+                                    color: deltaColor.withValues(alpha: 0.15),
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(color: deltaColor.withValues(alpha: 0.4)),
+                                  ),
+                                  child: Text(
+                                    deltaText,
+                                    style: TextStyle(
+                                      fontFamily: AppTypography.fontFamily,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.w800,
+                                      color: deltaColor,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: AppPalette.gold),
+              onPressed: () {
+                Navigator.pop(ctx);
                 setState(() {
+                  _userSquad = growthResults.map((r) => r.player).toList();
                   _currentSeason++;
                   _currentGameweek = 1;
                   _budgetMillions += totalSeasonPrize;
@@ -2766,11 +3017,38 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                 });
                 _persistCareerState();
               },
-              child: const Text('Begin Pre-Season', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
+              child: Text(
+                'Begin Season ${_currentSeason + 1}',
+                style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
+              ),
             ),
           ],
         );
       },
+    );
+  }
+
+  Widget _buildGrowthStatSummary(String label, String value, Color color) {
+    return Column(
+      children: [
+        Text(
+          value,
+          style: TextStyle(
+            fontFamily: AppTypography.fontFamily,
+            fontSize: 16,
+            fontWeight: FontWeight.w800,
+            color: color,
+          ),
+        ),
+        Text(
+          label,
+          style: const TextStyle(
+            fontFamily: AppTypography.fontFamily,
+            fontSize: 9.5,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
     );
   }
 
@@ -4859,6 +5137,45 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                       ),
                       const SizedBox(width: 6),
                       PositionBadge(position: player.primaryPosition),
+                      if ((player.age?.round() ?? 25) <= 23 && (player.potential?.round() ?? 0) > player.overall) ...[
+                        const SizedBox(width: 4),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: AppPalette.green.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(3),
+                            border: Border.all(color: AppPalette.green.withValues(alpha: 0.35)),
+                          ),
+                          child: Text(
+                            'POT ${(player.potential?.round() ?? 0)}',
+                            style: const TextStyle(
+                              fontFamily: AppTypography.fontFamily,
+                              fontSize: 8.5,
+                              fontWeight: FontWeight.w800,
+                              color: AppPalette.green,
+                            ),
+                          ),
+                        ),
+                      ] else if ((player.age?.round() ?? 25) >= 33) ...[
+                        const SizedBox(width: 4),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: AppPalette.coral.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(3),
+                            border: Border.all(color: AppPalette.coral.withValues(alpha: 0.35)),
+                          ),
+                          child: const Text(
+                            '33+ VET',
+                            style: TextStyle(
+                              fontFamily: AppTypography.fontFamily,
+                              fontSize: 8.5,
+                              fontWeight: FontWeight.w800,
+                              color: AppPalette.coral,
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                   Text(

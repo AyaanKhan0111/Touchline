@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_palette.dart';
 import '../../core/theme/app_typography.dart';
 import '../../domain/models/player.dart';
+import '../../domain/services/player_growth_service.dart';
 import '../shared/widgets/player_avatar.dart';
 import '../shared/widgets/stat_badge.dart';
 import '../career/career_screen.dart';
@@ -120,7 +121,32 @@ class PlayerDetailSheet extends StatelessWidget {
                           ],
                         ),
                       ),
-                      StatBadge(value: player.overall, label: player.primaryPosition, isLarge: true),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          StatBadge(value: player.overall, label: player.primaryPosition, isLarge: true),
+                          if (player.potential != null && player.potential! > player.overall) ...[
+                            const SizedBox(height: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: AppPalette.green.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(4),
+                                border: Border.all(color: AppPalette.green.withValues(alpha: 0.4)),
+                              ),
+                              child: Text(
+                                'POT ${player.potential!.round()}',
+                                style: const TextStyle(
+                                  fontFamily: AppTypography.fontFamily,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w800,
+                                  color: AppPalette.green,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
                     ],
                   ),
 
@@ -164,6 +190,9 @@ class PlayerDetailSheet extends StatelessWidget {
                     ink,
                     inkMuted,
                   ),
+                  if (player.potential != null)
+                    _buildDataRow('FIFA Potential', '${player.potential!.round()}', ink, inkMuted),
+                  _buildDataRow('Development Status', PlayerGrowthService.getPotentialTierDescription(player), ink, inkMuted),
                   _buildDataRow('Shirt Number', player.shirtNumber != null ? '#${player.shirtNumber!.toInt()}' : '—', ink, inkMuted),
                   _buildDataRow('Eligible Positions', player.allPositions, ink, inkMuted),
 

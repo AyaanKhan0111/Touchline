@@ -133,6 +133,8 @@ class PrefsService {
   static const _keyCareerCarabaoCupTournament = 'career_carabao_cup_tournament';
   static const _keyCareerRecentFaCupResults = 'career_recent_fa_cup_results';
   static const _keyCareerRecentCarabaoResults = 'career_recent_carabao_results';
+  static const _keyCareerPlayerRatingsOverride = 'career_player_ratings_override';
+  static const _keyCareerPlayerAgesOverride = 'career_player_ages_override';
 
   Future<Map<String, dynamic>?> getCareerConfig() async {
     final p = await prefs;
@@ -296,6 +298,24 @@ class PrefsService {
       } catch (_) {}
     }
 
+    final playerRatingsRaw = p.getString(_keyCareerPlayerRatingsOverride);
+    Map<String, int> playerRatingsOverride = {};
+    if (playerRatingsRaw != null) {
+      try {
+        final decoded = jsonDecode(playerRatingsRaw) as Map<String, dynamic>;
+        playerRatingsOverride = decoded.map((k, v) => MapEntry(k, (v as num).toInt()));
+      } catch (_) {}
+    }
+
+    final playerAgesRaw = p.getString(_keyCareerPlayerAgesOverride);
+    Map<String, int> playerAgesOverride = {};
+    if (playerAgesRaw != null) {
+      try {
+        final decoded = jsonDecode(playerAgesRaw) as Map<String, dynamic>;
+        playerAgesOverride = decoded.map((k, v) => MapEntry(k, (v as num).toInt()));
+      } catch (_) {}
+    }
+
     return {
       'leagueId': p.getString(_keyCareerLeagueId) ?? 'premier_league',
       'clubName': clubName,
@@ -326,6 +346,8 @@ class PrefsService {
       'carabaoCupTournament': carabaoCupTournament,
       'recentFaCupResults': recentFaCupResults,
       'recentCarabaoResults': recentCarabaoResults,
+      'playerRatingsOverride': playerRatingsOverride,
+      'playerAgesOverride': playerAgesOverride,
     };
   }
 
@@ -359,6 +381,8 @@ class PrefsService {
     double? prizeMoney,
     Map<String, double>? leagueClubRatingTotals,
     Map<String, int>? leagueClubRatingCounts,
+    Map<String, int>? playerRatingsOverride,
+    Map<String, int>? playerAgesOverride,
   }) async {
     final p = await prefs;
     await p.setString(_keyCareerLeagueId, leagueId);
@@ -427,6 +451,12 @@ class PrefsService {
     if (leagueClubRatingCounts != null) {
       await p.setString(_keyCareerLeagueClubRatingCounts, jsonEncode(leagueClubRatingCounts));
     }
+    if (playerRatingsOverride != null) {
+      await p.setString(_keyCareerPlayerRatingsOverride, jsonEncode(playerRatingsOverride));
+    }
+    if (playerAgesOverride != null) {
+      await p.setString(_keyCareerPlayerAgesOverride, jsonEncode(playerAgesOverride));
+    }
   }
 
   Future<void> clearCareerConfig() async {
@@ -462,5 +492,7 @@ class PrefsService {
     await p.remove(_keyCareerPrizeMoney);
     await p.remove(_keyCareerLeagueClubRatingTotals);
     await p.remove(_keyCareerLeagueClubRatingCounts);
+    await p.remove(_keyCareerPlayerRatingsOverride);
+    await p.remove(_keyCareerPlayerAgesOverride);
   }
 }
