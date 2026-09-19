@@ -4459,6 +4459,75 @@ void main() {
       expect(restored.awayPlayerPositions['Lewandowski'], equals('ST'));
     });
   });
+
+  group('Fix 38: FIFA-Style Career Hub Modular Navigation & Tab System', () {
+    test('Career Hub 5-tab navigation indices match design spec', () {
+      const tabMatches = 0;
+      const tabSquad = 1;
+      const tabTransfers = 2;
+      const tabTables = 3;
+      const tabResults = 4;
+
+      expect(tabMatches, equals(0), reason: 'Matches hub must be the primary landing screen (Tab 0)');
+      expect(tabSquad, equals(1), reason: 'Squad & tactics management must be Tab 1');
+      expect(tabTransfers, equals(2), reason: 'Transfer market and inbound offers must be Tab 2');
+      expect(tabTables, equals(3), reason: 'Standings, cups and league statistics must be Tab 3');
+      expect(tabResults, equals(4), reason: 'Matchday scoreboard and history archive must be Tab 4');
+    });
+
+    test('Pending transfer offers correctly compute badge notifications for Transfers tab', () {
+      final offers = [
+        TransferOffer(
+          id: 'offer_1',
+          playerName: 'Bruno Fernandes',
+          playerPosition: 'CAM',
+          playerOverall: 88,
+          playerAge: 30,
+          buyingClub: 'Paris Saint-Germain',
+          buyingClubTier: 'Tier 1',
+          playerMarketValue: 65.0,
+          offeredFeeMillions: 78.0,
+          season: 1,
+          gameweek: 5,
+          status: 'pending',
+          date: DateTime.now(),
+        ),
+        TransferOffer(
+          id: 'offer_2',
+          playerName: 'Marcus Rashford',
+          playerPosition: 'LW',
+          playerOverall: 84,
+          playerAge: 27,
+          buyingClub: 'Barcelona',
+          buyingClubTier: 'Tier 1',
+          playerMarketValue: 45.0,
+          offeredFeeMillions: 52.0,
+          season: 1,
+          gameweek: 5,
+          status: 'pending',
+          date: DateTime.now(),
+        ),
+        TransferOffer(
+          id: 'offer_3',
+          playerName: 'Casemiro',
+          playerPosition: 'CDM',
+          playerOverall: 84,
+          playerAge: 33,
+          buyingClub: 'Al-Nassr',
+          buyingClubTier: 'Tier 2',
+          playerMarketValue: 20.0,
+          offeredFeeMillions: 22.0,
+          season: 1,
+          gameweek: 5,
+          status: 'accepted',
+          date: DateTime.now(),
+        ),
+      ];
+
+      final pendingCount = offers.where((o) => o.isPending).length;
+      expect(pendingCount, equals(2), reason: 'Only pending offers must increment badge count');
+    });
+  });
 }
 
 

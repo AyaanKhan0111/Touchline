@@ -539,6 +539,22 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
   int _uclViewTab = 0; // 0: Groups, 1: Knockouts, 2: Scorers, 3: Assists, 4: Clean Sheets, 5: All Scorelines
   int _resultsCompTab = 0; // 0: Domestic League, 1: UCL Midweek, 2: FA Cup, 3: Carabao Cup
 
+  // Career Hub Tab Navigation (Fix 38)
+  int _careerTabIndex = 0; // 0: Matches Hub, 1: Squad, 2: Transfers, 3: Tables, 4: Results
+  late final PageController _careerPageController;
+
+  void _jumpToTab(int index) {
+    if (index < 0 || index > 4) return;
+    setState(() => _careerTabIndex = index);
+    if (_careerPageController.hasClients) {
+      _careerPageController.animateToPage(
+        index,
+        duration: const Duration(milliseconds: 280),
+        curve: Curves.easeOutCubic,
+      );
+    }
+  }
+
   late SimEngine _sim;
 
   // Setup Wizard draft state
@@ -557,12 +573,14 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
   @override
   void initState() {
     super.initState();
+    _careerPageController = PageController(initialPage: _careerTabIndex);
     _sim = SimEngine();
     _initSeason();
   }
 
   @override
   void dispose() {
+    _careerPageController.dispose();
     _customClubNameController.dispose();
     _customClubCodeController.dispose();
     super.dispose();
@@ -4841,16 +4859,627 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
           ),
         ],
       ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Manager Office & Club Banner
-            HeroCard(
+      body: PageView(
+        controller: _careerPageController,
+        physics: const BouncingScrollPhysics(),
+        onPageChanged: (index) {
+          if (_careerTabIndex != index) {
+            setState(() {
+              _careerTabIndex = index;
+            });
+          }
+        },
+        children: [
+          _buildMatchesHubTab(isDark, ink, inkMuted, border, activeLeague),
+          _buildSquadTab(isDark, ink, inkMuted, border),
+          _buildTransfersTab(isDark, ink, inkMuted, border),
+          _buildTablesTab(isDark, ink, inkMuted, activeLeague),
+          _buildResultsTab(isDark, ink, inkMuted, activeLeague),
+        ],
+      ),
+      bottomNavigationBar: _buildCareerBottomNav(isDark, ink, inkMuted),
+    );
+  }
+
+  /// Modern FIFA-style bottom navigation bar with glow and badges (Fix 38)
+  Widget _buildCareerBottomNav(bool isDark, Color ink, Color inkMuted) {
+    final pendingOffersCount = _pendingTransferOffers.where((o) => o.isPending).length;
+    final navItems = [
+      (icon: Icons.sports_soccer_rounded, label: 'MATCHES'),
+      (icon: Icons.groups_rounded, label: 'SQUAD'),
+      (icon: Icons.swap_horiz_rounded, label: 'TRANSFERS'),
+      (icon: Icons.emoji_events_rounded, label: 'TABLES'),
+      (icon: Icons.scoreboard_rounded, label: 'RESULTS'),
+    ];
+
+    return Container(
+      decoration: BoxDecoration(
+        color: isDark ? AppPalette.darkCard : Colors.white,
+        border: Border(
+          top: BorderSide(
+            color: isDark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.08),
+            width: 1,
+          ),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.06),
+            blurRadius: 10,
+            offset: const Offset(0, -2),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        top: false,
+        child: SizedBox(
+          height: 60,
+          child: Row(
+            children: List.generate(navItems.length, (idx) {
+              final isSelected = _careerTabIndex == idx;
+              final item = navItems[idx];
+              final hasBadge = idx == 2 && pendingOffersCount > 0;
+
+              return Expanded(
+                child: InkWell(
+                  onTap: () => _jumpToTab(idx),
+                  splashColor: AppPalette.gold.withValues(alpha: 0.12),
+                  highlightColor: Colors.transparent,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      // Active indicator line/pill
+                      Container(
+                        height: 3,
+                        width: isSelected ? 24 : 0,
+                        margin: const EdgeInsets.only(bottom: 4),
+                        decoration: BoxDecoration(
+                          color: AppPalette.gold,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                      Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          Icon(
+                            item.icon,
+                            size: 22,
+                            color: isSelected ? AppPalette.gold : inkMuted.withValues(alpha: 0.6),
+                          ),
+                          if (hasBadge)
+                            Positioned(
+                              top: -4,
+                              right: -8,
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                decoration: BoxDecoration(
+                                  color: AppPalette.red,
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(
+                                    color: isDark ? AppPalette.darkCard : Colors.white,
+                                    width: 1.5,
+                                  ),
+                                ),
+                                child: Text(
+                                  '$pendingOffersCount',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        item.label,
+                        style: TextStyle(
+                          fontFamily: AppTypography.bodyFamily,
+                          fontSize: 10,
+                          letterSpacing: 0.4,
+                          fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                          color: isSelected ? AppPalette.gold : inkMuted.withValues(alpha: 0.65),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Tab 0: Matches Hub — Manager Office, Next Fixture, Quick Action Tiles & Standings Snapshot
+  Widget _buildMatchesHubTab(bool isDark, Color ink, Color inkMuted, Color border, LeagueDefinition activeLeague) {
+    final progress = (_currentGameweek / _totalGameweeks).clamp(0.0, 1.0);
+    final userTableEntry = _leagueTable.where((t) => t.clubName == _userClub).toList();
+    final userRank = userTableEntry.isNotEmpty ? _leagueTable.indexOf(userTableEntry.first) + 1 : 1;
+    final userPts = userTableEntry.isNotEmpty ? userTableEntry.first.points : 0;
+    final userGd = userTableEntry.isNotEmpty ? userTableEntry.first.goalDifference : 0;
+
+    // Recent user club match
+    final recentUserMatch = _recentResults.where((m) => m.homeClub == _userClub || m.awayClub == _userClub).toList();
+    final lastMatch = recentUserMatch.isNotEmpty ? recentUserMatch.first : null;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      physics: const BouncingScrollPhysics(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 1. Manager Office & Club Banner
+          HeroCard(
+            child: Row(
+              children: [
+                ClubBadge(code: _userClubCode, size: 48),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              _userClub,
+                              style: AppTypography.titleMedium(ink),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (_isCustomClub) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: AppPalette.gold.withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                'CUSTOM',
+                                style: AppTypography.caption(AppPalette.gold).copyWith(fontSize: 9, fontWeight: FontWeight.w700),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              '${activeLeague.divisionTitle} • S$_currentSeason (GW $_currentGameweek/$_totalGameweeks)',
+                              style: AppTypography.caption(inkMuted),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                          if (_careerPrizeMoneyEarned > 0) ...[
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                              decoration: BoxDecoration(
+                                color: AppPalette.green.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                '+£${_careerPrizeMoneyEarned.toStringAsFixed(1)}M WON',
+                                style: const TextStyle(
+                                  fontFamily: AppTypography.bodyFamily,
+                                  fontSize: 8.5,
+                                  fontWeight: FontWeight.w800,
+                                  color: AppPalette.green,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                FilledButton.icon(
+                  onPressed: _simMatchday,
+                  icon: const Icon(Icons.play_arrow_rounded, size: 18),
+                  label: Text(_currentGameweek <= _totalGameweeks ? 'Sim Match' : 'End Season'),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppPalette.gold,
+                    foregroundColor: isDark ? AppPalette.darkBg : Colors.white,
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 12),
+
+          // 2. Next Fixture Hero Card
+          _buildNextFixtureCard(
+            activeLeague: activeLeague,
+            isDark: isDark,
+            ink: ink,
+            inkMuted: inkMuted,
+          ),
+
+          const SizedBox(height: 12),
+
+          // 3. FIFA-Style Horizontal Quick Action Tiles
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            child: Row(
+              children: [
+                _buildQuickActionCard(
+                  title: 'TACTICS & SQUAD',
+                  subtitle: 'Formation $_formationId • ${_userSquad.length} Players',
+                  icon: Icons.groups_rounded,
+                  color: AppPalette.darkAccent,
+                  isDark: isDark,
+                  ink: ink,
+                  inkMuted: inkMuted,
+                  onTap: () => _jumpToTab(1),
+                ),
+                const SizedBox(width: 10),
+                _buildQuickActionCard(
+                  title: 'TRANSFER HUB',
+                  subtitle: 'War Chest: £${_budgetMillions.toStringAsFixed(1)}M',
+                  icon: Icons.swap_horiz_rounded,
+                  color: AppPalette.gold,
+                  isDark: isDark,
+                  ink: ink,
+                  inkMuted: inkMuted,
+                  badge: _pendingTransferOffers.where((o) => o.isPending).isNotEmpty
+                      ? '${_pendingTransferOffers.where((o) => o.isPending).length} Bids'
+                      : null,
+                  onTap: () => _jumpToTab(2),
+                ),
+                const SizedBox(width: 10),
+                _buildQuickActionCard(
+                  title: 'STANDINGS & CUPS',
+                  subtitle: 'Rank #$userRank • $userPts PTS',
+                  icon: Icons.emoji_events_rounded,
+                  color: Colors.deepPurpleAccent,
+                  isDark: isDark,
+                  ink: ink,
+                  inkMuted: inkMuted,
+                  onTap: () => _jumpToTab(3),
+                ),
+                const SizedBox(width: 10),
+                _buildQuickActionCard(
+                  title: 'MATCH RESULTS',
+                  subtitle: _recentResults.isNotEmpty ? 'Latest GW ${_currentGameweek - 1} Scores' : 'Awaiting Matchday 1',
+                  icon: Icons.scoreboard_rounded,
+                  color: AppPalette.green,
+                  isDark: isDark,
+                  ink: ink,
+                  inkMuted: inkMuted,
+                  onTap: () => _jumpToTab(4),
+                ),
+                const SizedBox(width: 10),
+                _buildQuickActionCard(
+                  title: 'FULL SCHEDULE',
+                  subtitle: '$_totalGameweeks Calendar Fixtures',
+                  icon: Icons.calendar_month_rounded,
+                  color: Colors.blueAccent,
+                  isDark: isDark,
+                  ink: ink,
+                  inkMuted: inkMuted,
+                  onTap: _openScheduleSheet,
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 12),
+
+          // 4. Season Gameweek Progress Bar
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: isDark ? AppPalette.darkCard : AppPalette.lightCard,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: border),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'SEASON PROGRESS',
+                      style: AppTypography.caption(inkMuted).copyWith(fontWeight: FontWeight.w800, letterSpacing: 0.6),
+                    ),
+                    Text(
+                      'GW $_currentGameweek / $_totalGameweeks (${(progress * 100).toInt()}%)',
+                      style: AppTypography.caption(AppPalette.gold).copyWith(fontWeight: FontWeight.w700),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: progress,
+                    minHeight: 6,
+                    backgroundColor: isDark ? Colors.white.withValues(alpha: 0.1) : Colors.black.withValues(alpha: 0.08),
+                    valueColor: const AlwaysStoppedAnimation<Color>(AppPalette.gold),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 12),
+
+          // 5. League Snapshot Card
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: isDark ? AppPalette.darkCard : AppPalette.lightCard,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: border),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.table_rows_rounded, color: AppPalette.gold, size: 18),
+                        const SizedBox(width: 8),
+                        Text(
+                          'LEAGUE SNAPSHOT',
+                          style: AppTypography.caption(AppPalette.gold).copyWith(fontWeight: FontWeight.w800, letterSpacing: 0.5),
+                        ),
+                      ],
+                    ),
+                    TextButton(
+                      onPressed: () => _jumpToTab(3),
+                      style: TextButton.styleFrom(padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
+                      child: const Row(
+                        children: [
+                          Text('Full Table', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppPalette.gold)),
+                          Icon(Icons.chevron_right_rounded, size: 16, color: AppPalette.gold),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: AppPalette.gold.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: AppPalette.gold.withValues(alpha: 0.3)),
+                        ),
+                        child: Column(
+                          children: [
+                            Text('YOUR RANK', style: AppTypography.caption(inkMuted).copyWith(fontSize: 10)),
+                            const SizedBox(height: 2),
+                            Text('#$userRank', style: AppTypography.titleLarge(AppPalette.gold).copyWith(fontWeight: FontWeight.w900)),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.03),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Column(
+                          children: [
+                            Text('POINTS', style: AppTypography.caption(inkMuted).copyWith(fontSize: 10)),
+                            const SizedBox(height: 2),
+                            Text('$userPts', style: AppTypography.titleLarge(ink).copyWith(fontWeight: FontWeight.w900)),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.03),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Column(
+                          children: [
+                            Text('GOAL DIFF', style: AppTypography.caption(inkMuted).copyWith(fontSize: 10)),
+                            const SizedBox(height: 2),
+                            Text('${userGd >= 0 ? "+" : ""}$userGd', style: AppTypography.titleLarge(ink).copyWith(fontWeight: FontWeight.w900)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          if (lastMatch != null) ...[
+            const SizedBox(height: 12),
+            InkWell(
+              onTap: () => _jumpToTab(4),
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: isDark ? AppPalette.darkCard : AppPalette.lightCard,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppPalette.green.withValues(alpha: 0.4)),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: AppPalette.green.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: const Icon(Icons.history_rounded, color: AppPalette.green, size: 20),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'LAST MATCH (GW ${_currentGameweek - 1})',
+                            style: AppTypography.caption(AppPalette.green).copyWith(fontWeight: FontWeight.w800),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '${lastMatch.homeClub} ${lastMatch.homeGoals} - ${lastMatch.awayGoals} ${lastMatch.awayClub}',
+                            style: AppTypography.bodyMedium(ink).copyWith(fontWeight: FontWeight.w700),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Text('Full Report', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppPalette.green)),
+                    const SizedBox(width: 4),
+                    const Icon(Icons.arrow_forward_ios_rounded, size: 12, color: AppPalette.green),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  /// Tab 1: Squad Hub — Formation, Starting XI, Bench, Auto-Pick, Swap & Tactics
+  Widget _buildSquadTab(bool isDark, Color ink, Color inkMuted, Color border) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      physics: const BouncingScrollPhysics(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // Tactical Header Card
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: isDark ? AppPalette.darkCard : AppPalette.lightCard,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: border),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: AppPalette.darkAccent.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(Icons.sports_soccer_rounded, color: AppPalette.darkAccent, size: 24),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'FORMATION: $_formationId',
+                        style: AppTypography.caption(AppPalette.gold).copyWith(fontWeight: FontWeight.w800, letterSpacing: 0.6),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Starting XI: 4 Defenders • 3 Midfielders • 3 Attackers',
+                        style: AppTypography.bodySmall(inkMuted).copyWith(fontSize: 11),
+                      ),
+                    ],
+                  ),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: _openFormationEditor,
+                  icon: const Icon(Icons.dashboard_customize_rounded, size: 16),
+                  label: const Text('Pitch View'),
+                  style: FilledButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 12),
+
+          // Squad Management Section (Starting XI, Bench, Reserves, Swaps, Auto-Pick)
+          _buildSquadManagementSection(isDark, ink, inkMuted, border),
+        ],
+      ),
+    );
+  }
+
+  /// Tab 2: Transfers Hub — Transfer Window Card, Enter Market CTA, Inbound Offers & Contracts
+  Widget _buildTransfersTab(bool isDark, Color ink, Color inkMuted, Color border) {
+    final pendingOffers = _pendingTransferOffers.where((o) => o.isPending).toList();
+    final expiringCount = _playerContracts.values.where((c) => c <= 1).length;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      physics: const BouncingScrollPhysics(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // 1. Transfer Window Status Card
+          _buildTransferWindowCard(
+            windowState: TransferWindowState.compute(
+              gameweek: _currentGameweek,
+              totalGameweeks: _totalGameweeks,
+            ),
+            isDark: isDark,
+            ink: ink,
+            inkMuted: inkMuted,
+          ),
+
+          const SizedBox(height: 14),
+
+          // 2. Interactive "ENTER TRANSFER MARKET" Banner
+          InkWell(
+            onTap: _openTransferMarket,
+            borderRadius: BorderRadius.circular(14),
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [
+                    AppPalette.gold.withValues(alpha: isDark ? 0.25 : 0.15),
+                    AppPalette.gold.withValues(alpha: isDark ? 0.08 : 0.04),
+                  ],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: AppPalette.gold.withValues(alpha: 0.6), width: 1.5),
+              ),
               child: Row(
                 children: [
-                  ClubBadge(code: _userClubCode, size: 48),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppPalette.gold.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: const Icon(Icons.storefront_rounded, color: AppPalette.gold, size: 28),
+                  ),
                   const SizedBox(width: 14),
                   Expanded(
                     child: Column(
@@ -4858,543 +5487,772 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                       children: [
                         Row(
                           children: [
-                            Flexible(
-                              child: Text(
-                                _userClub,
-                                style: AppTypography.titleMedium(ink),
-                                overflow: TextOverflow.ellipsis,
+                            Text(
+                              'TRANSFER MARKET',
+                              style: AppTypography.caption(AppPalette.gold).copyWith(
+                                fontWeight: FontWeight.w900,
+                                letterSpacing: 0.8,
                               ),
                             ),
-                            if (_isCustomClub) ...[
-                              const SizedBox(width: 6),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: AppPalette.gold.withValues(alpha: 0.2),
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: Text(
-                                  'CUSTOM',
-                                  style: AppTypography.caption(AppPalette.gold).copyWith(fontSize: 9, fontWeight: FontWeight.w700),
+                            const SizedBox(width: 6),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: AppPalette.gold,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                '10,400+ PLAYERS',
+                                style: TextStyle(
+                                  fontSize: 8.5,
+                                  fontWeight: FontWeight.w900,
+                                  color: isDark ? AppPalette.darkBg : Colors.white,
                                 ),
                               ),
-                            ],
+                            ),
                           ],
                         ),
+                        const SizedBox(height: 3),
+                        Text(
+                          'Search, scout, buy stars & sign free agents',
+                          style: AppTypography.bodySmall(ink).copyWith(fontWeight: FontWeight.w600),
+                        ),
                         const SizedBox(height: 2),
-                        Row(
-                          children: [
-                            Flexible(
-                              child: Text(
-                                '${activeLeague.divisionTitle} • S$_currentSeason (GW $_currentGameweek/$_totalGameweeks)',
-                                style: AppTypography.caption(inkMuted),
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                            if (_careerPrizeMoneyEarned > 0) ...[
-                              const SizedBox(width: 6),
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-                                decoration: BoxDecoration(
-                                  color: AppPalette.green.withValues(alpha: 0.15),
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: Text(
-                                  '+£${_careerPrizeMoneyEarned.toStringAsFixed(1)}M WON',
-                                  style: const TextStyle(
-                                    fontFamily: AppTypography.bodyFamily,
-                                    fontSize: 8.5,
-                                    fontWeight: FontWeight.w800,
-                                    color: AppPalette.green,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ],
+                        Text(
+                          'Remaining War Chest: £${_budgetMillions.toStringAsFixed(1)}M',
+                          style: AppTypography.caption(AppPalette.green).copyWith(fontWeight: FontWeight.w700),
                         ),
                       ],
                     ),
                   ),
-                  FilledButton.icon(
-                    onPressed: _simMatchday,
-                    icon: const Icon(Icons.play_arrow_rounded, size: 18),
-                    label: Text(_currentGameweek <= _totalGameweeks ? 'Sim' : 'End'),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: AppPalette.gold,
-                      foregroundColor: isDark ? AppPalette.darkBg : Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    ),
-                  ),
+                  const Icon(Icons.arrow_forward_ios_rounded, size: 16, color: AppPalette.gold),
                 ],
               ),
             ),
+          ),
 
-            const SizedBox(height: 12),
+          const SizedBox(height: 14),
 
-            // Transfer Window Status Banner (Issue #12)
-            _buildTransferWindowCard(
-              windowState: TransferWindowState.compute(
-                gameweek: _currentGameweek,
-                totalGameweeks: _totalGameweeks,
+          // 3. Inbound Transfer Bids / Offers Card
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: isDark ? AppPalette.darkCard : AppPalette.lightCard,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: pendingOffers.isNotEmpty ? AppPalette.gold.withValues(alpha: 0.6) : border,
+                width: pendingOffers.isNotEmpty ? 1.5 : 1,
               ),
-              isDark: isDark,
-              ink: ink,
-              inkMuted: inkMuted,
             ),
-
-            const SizedBox(height: 12),
-
-            // Next Fixture Preview Card (Issue #12)
-            _buildNextFixtureCard(
-              activeLeague: activeLeague,
-              isDark: isDark,
-              ink: ink,
-              inkMuted: inkMuted,
-            ),
-
-            const SizedBox(height: 16),
-
-            // Unified Matchday Scoreboard & Report (Issue #7, Fix 23, Fix 24 & Fix 26 / User Fix 1, 2 & 4)
-            if (_recentResults.isNotEmpty || _recentUclResults.isNotEmpty || _recentFaCupResults.isNotEmpty || _recentCarabaoResults.isNotEmpty) ...[
-              Builder(
-                builder: (context) {
-                  final displayLeague = List<MatchResult>.from(_recentResults)..sort((a, b) {
-                    final aUser = a.homeClub == _userClub || a.awayClub == _userClub;
-                    final bUser = b.homeClub == _userClub || b.awayClub == _userClub;
-                    if (aUser && !bUser) return -1;
-                    if (!aUser && bUser) return 1;
-                    return 0;
-                  });
-
-                  final displayUcl = List<MatchResult>.from(_recentUclResults)..sort((a, b) {
-                    final aUser = a.homeClub == _userClub || a.awayClub == _userClub;
-                    final bUser = b.homeClub == _userClub || b.awayClub == _userClub;
-                    if (aUser && !bUser) return -1;
-                    if (!aUser && bUser) return 1;
-                    return 0;
-                  });
-
-                  final displayFa = List<MatchResult>.from(_recentFaCupResults)..sort((a, b) {
-                    final aUser = a.homeClub == _userClub || a.awayClub == _userClub;
-                    final bUser = b.homeClub == _userClub || b.awayClub == _userClub;
-                    if (aUser && !bUser) return -1;
-                    if (!aUser && bUser) return 1;
-                    return 0;
-                  });
-
-                  final displayCarabao = List<MatchResult>.from(_recentCarabaoResults)..sort((a, b) {
-                    final aUser = a.homeClub == _userClub || a.awayClub == _userClub;
-                    final bUser = b.homeClub == _userClub || b.awayClub == _userClub;
-                    if (aUser && !bUser) return -1;
-                    if (!aUser && bUser) return 1;
-                    return 0;
-                  });
-
-                  // User matches
-                  final userLeagueMatches = displayLeague.where(
-                    (m) => m.homeClub == _userClub || m.awayClub == _userClub,
-                  );
-                  final userLeagueMatch = userLeagueMatches.isNotEmpty ? userLeagueMatches.first : null;
-
-                  final userUclMatches = displayUcl.where(
-                    (m) => m.homeClub == _userClub || m.awayClub == _userClub,
-                  );
-                  final userUclMatch = userUclMatches.isNotEmpty ? userUclMatches.first : null;
-
-                  final userFaMatches = displayFa.where(
-                    (m) => m.homeClub == _userClub || m.awayClub == _userClub,
-                  );
-                  final userFaMatch = userFaMatches.isNotEmpty ? userFaMatches.first : null;
-
-                  final userCarabaoMatches = displayCarabao.where(
-                    (m) => m.homeClub == _userClub || m.awayClub == _userClub,
-                  );
-                  final userCarabaoMatch = userCarabaoMatches.isNotEmpty ? userCarabaoMatches.first : null;
-
-                  final hasUcl = _recentUclResults.isNotEmpty;
-                  final hasFa = _recentFaCupResults.isNotEmpty;
-                  final hasCarabao = _recentCarabaoResults.isNotEmpty;
-                  final hasMultipleComps = hasUcl || hasFa || hasCarabao;
-
-                  List<MatchResult> currentResultsList = displayLeague;
-                  String currentCompName = activeLeague.name.toUpperCase();
-                  MatchResult? currentUserMatch = userLeagueMatch;
-
-                  if (_resultsCompTab == 1 && hasUcl) {
-                    currentResultsList = displayUcl;
-                    currentCompName = 'UEFA CHAMPIONS LEAGUE';
-                    currentUserMatch = userUclMatch;
-                  } else if (_resultsCompTab == 2 && hasFa) {
-                    currentResultsList = displayFa;
-                    currentCompName = 'THE EMIRATES FA CUP';
-                    currentUserMatch = userFaMatch;
-                  } else if (_resultsCompTab == 3 && hasCarabao) {
-                    currentResultsList = displayCarabao;
-                    currentCompName = 'CARABAO CUP';
-                    currentUserMatch = userCarabaoMatch;
-                  }
-
-                  return AlmanacCard(
-                    sectionTitle: 'MATCHDAY ${_currentGameweek - 1} SCOREBOARD & REPORT',
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
                       children: [
-                        // 1. TOP SPOTLIGHT: YOUR CLUB MATCHES THIS MATCHDAY
-                        if (userLeagueMatch != null || userUclMatch != null || userFaMatch != null || userCarabaoMatch != null) ...[
-                          if (userLeagueMatch != null) ...[
-                            _buildMatchResultTile(
-                              m: userLeagueMatch,
-                              isDark: isDark,
-                              ink: ink,
-                              inkMuted: inkMuted,
-                              activeLeague: activeLeague,
-                              competitionName: activeLeague.name.toUpperCase(),
-                            ),
-                          ],
-                          if (userUclMatch != null) ...[
-                            const SizedBox(height: 8),
-                            _buildMatchResultTile(
-                              m: userUclMatch,
-                              isDark: isDark,
-                              ink: ink,
-                              inkMuted: inkMuted,
-                              activeLeague: activeLeague,
-                              competitionName: 'UEFA CHAMPIONS LEAGUE',
-                            ),
-                          ],
-                          if (userFaMatch != null) ...[
-                            const SizedBox(height: 8),
-                            _buildMatchResultTile(
-                              m: userFaMatch,
-                              isDark: isDark,
-                              ink: ink,
-                              inkMuted: inkMuted,
-                              activeLeague: activeLeague,
-                              competitionName: 'THE EMIRATES FA CUP',
-                            ),
-                          ],
-                          if (userCarabaoMatch != null) ...[
-                            const SizedBox(height: 8),
-                            _buildMatchResultTile(
-                              m: userCarabaoMatch,
-                              isDark: isDark,
-                              ink: ink,
-                              inkMuted: inkMuted,
-                              activeLeague: activeLeague,
-                              competitionName: 'CARABAO CUP',
-                            ),
-                          ],
-                          const SizedBox(height: 12),
-                        ],
-
-                        // 2. COMPETITION TOGGLE SWITCHER (if cup/continental matches were played this gameweek)
-                        if (hasMultipleComps) ...[
-                          Container(
-                            padding: const EdgeInsets.all(3),
-                            margin: const EdgeInsets.only(bottom: 12),
-                            decoration: BoxDecoration(
-                              color: isDark ? Colors.white.withValues(alpha: 0.06) : Colors.black.withValues(alpha: 0.05),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: SingleChildScrollView(
-                              scrollDirection: Axis.horizontal,
-                              child: Row(
-                                children: [
-                                  _buildResultCompTabButton(
-                                    tabIndex: 0,
-                                    label: '${activeLeague.clubCodes[_userClub] ?? 'LEAGUE'} (${displayLeague.length})',
-                                    icon: Icons.sports_soccer_rounded,
-                                    isDark: isDark,
-                                    ink: ink,
-                                    inkMuted: inkMuted,
-                                  ),
-                                  if (hasUcl) ...[
-                                    const SizedBox(width: 4),
-                                    _buildResultCompTabButton(
-                                      tabIndex: 1,
-                                      label: 'UCL (${displayUcl.length})',
-                                      icon: Icons.star_rounded,
-                                      isDark: isDark,
-                                      ink: ink,
-                                      inkMuted: inkMuted,
-                                      isUcl: true,
-                                    ),
-                                  ],
-                                  if (hasFa) ...[
-                                    const SizedBox(width: 4),
-                                    _buildResultCompTabButton(
-                                      tabIndex: 2,
-                                      label: 'FA CUP (${displayFa.length})',
-                                      icon: Icons.workspace_premium_rounded,
-                                      isDark: isDark,
-                                      ink: ink,
-                                      inkMuted: inkMuted,
-                                    ),
-                                  ],
-                                  if (hasCarabao) ...[
-                                    const SizedBox(width: 4),
-                                    _buildResultCompTabButton(
-                                      tabIndex: 3,
-                                      label: 'CARABAO (${displayCarabao.length})',
-                                      icon: Icons.shield_rounded,
-                                      isDark: isDark,
-                                      ink: ink,
-                                      inkMuted: inkMuted,
-                                    ),
-                                  ],
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-
-                        // 3. SECTION HEADER FOR FIXTURES LIST
-                        Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 4),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: Divider(
-                                  color: theme.dividerColor.withValues(alpha: 0.3),
-                                  height: 1,
-                                  thickness: 0.5,
-                                ),
-                              ),
-                              Padding(
-                                padding: const EdgeInsets.symmetric(horizontal: 10),
-                                child: Text(
-                                  _resultsCompTab == 1 && hasUcl
-                                      ? 'ALL UCL MIDWEEK FIXTURES'
-                                      : _resultsCompTab == 2 && hasFa
-                                          ? 'ALL FA CUP FIXTURES'
-                                          : _resultsCompTab == 3 && hasCarabao
-                                              ? 'ALL CARABAO CUP FIXTURES'
-                                              : 'AROUND THE LEAGUE',
-                                  style: AppTypography.caption(inkMuted).copyWith(
-                                    fontSize: 9.5,
-                                    fontWeight: FontWeight.w700,
-                                    letterSpacing: 0.8,
-                                  ),
-                                ),
-                              ),
-                              Expanded(
-                                child: Divider(
-                                  color: theme.dividerColor.withValues(alpha: 0.3),
-                                  height: 1,
-                                  thickness: 0.5,
-                                ),
-                              ),
-                            ],
-                          ),
+                        const Icon(Icons.inbox_rounded, color: AppPalette.gold, size: 18),
+                        const SizedBox(width: 8),
+                        Text(
+                          'INBOUND TRANSFER BIDS',
+                          style: AppTypography.caption(AppPalette.gold).copyWith(fontWeight: FontWeight.w800, letterSpacing: 0.5),
                         ),
-                        const SizedBox(height: 6),
-
-                        // 4. FIXTURES LIST (excluding already featured user match)
-                        for (int idx = 0; idx < currentResultsList.length; idx++) ...[
-                          if (currentResultsList[idx] == currentUserMatch)
-                            const SizedBox.shrink()
-                          else ...[
-                            if (idx > 0)
-                              Divider(
-                                color: theme.dividerColor.withValues(alpha: 0.3),
-                                height: 16,
-                                thickness: 0.5,
-                              ),
-                            _buildMatchResultTile(
-                              m: currentResultsList[idx],
-                              isDark: isDark,
-                              ink: ink,
-                              inkMuted: inkMuted,
-                              activeLeague: activeLeague,
-                              competitionName: currentCompName,
-                            ),
-                          ],
-                        ],
                       ],
                     ),
-                  );
-                },
+                    if (pendingOffers.isNotEmpty)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: AppPalette.red,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Text(
+                          '${pendingOffers.length} PENDING',
+                          style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                if (pendingOffers.isNotEmpty) ...[
+                  for (final offer in pendingOffers.take(3)) ...[
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: isDark ? Colors.white.withValues(alpha: 0.04) : Colors.black.withValues(alpha: 0.03),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          ClubBadge(
+                            code: offer.buyingClub.length >= 3
+                                ? offer.buyingClub.substring(0, 3).toUpperCase()
+                                : offer.buyingClub.toUpperCase(),
+                            size: 28,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  offer.playerName,
+                                  style: AppTypography.bodySmall(ink).copyWith(fontWeight: FontWeight.w700),
+                                ),
+                                Text(
+                                  'Offered by ${offer.buyingClub} • £${offer.offeredFeeMillions.toStringAsFixed(1)}M',
+                                  style: AppTypography.caption(inkMuted).copyWith(fontSize: 10.5),
+                                ),
+                              ],
+                            ),
+                          ),
+                          FilledButton(
+                            onPressed: _openInboundOffersSheet,
+                            style: FilledButton.styleFrom(
+                              backgroundColor: AppPalette.gold,
+                              foregroundColor: isDark ? AppPalette.darkBg : Colors.white,
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              visualDensity: VisualDensity.compact,
+                            ),
+                            child: const Text('Review', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  if (pendingOffers.length > 3)
+                    Center(
+                      child: TextButton(
+                        onPressed: _openInboundOffersSheet,
+                        child: Text('View all ${pendingOffers.length} offers →'),
+                      ),
+                    ),
+                ] else ...[
+                  Text(
+                    'No active transfer bids. AI clubs will submit formal transfer offers for your players as the transfer window progresses on matchdays.',
+                    style: AppTypography.bodySmall(inkMuted).copyWith(fontSize: 12),
+                  ),
+                ],
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 14),
+
+          // 4. Contract Expiry & Squad Retain Status
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: isDark ? AppPalette.darkCard : AppPalette.lightCard,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: border),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: (expiringCount > 0 ? AppPalette.gold : AppPalette.green).withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    expiringCount > 0 ? Icons.alarm_rounded : Icons.verified_user_rounded,
+                    color: expiringCount > 0 ? AppPalette.gold : AppPalette.green,
+                    size: 24,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'SQUAD CONTRACT EXPIRY',
+                        style: AppTypography.caption(expiringCount > 0 ? AppPalette.gold : AppPalette.green)
+                            .copyWith(fontWeight: FontWeight.w800, letterSpacing: 0.5),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        expiringCount > 0
+                            ? '$expiringCount player${expiringCount > 1 ? "s have" : " has"} contracts expiring soon'
+                            : 'All squad players have secure multi-year contracts',
+                        style: AppTypography.bodySmall(ink).copyWith(fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => _jumpToTab(1),
+                  child: const Text('View Squad', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700)),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Tab 3: Tables Hub — Full Standings, Team Stats, Scorers, Assists, Clean Sheets, UCL & Cups
+  Widget _buildTablesTab(bool isDark, Color ink, Color inkMuted, LeagueDefinition activeLeague) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      physics: const BouncingScrollPhysics(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          AlmanacCard(
+            sectionTitle: _standingsTab == 0
+                ? '${activeLeague.divisionTitle.toUpperCase()} STANDINGS'
+                : _standingsTab == 1
+                    ? 'LEAGUE TEAM STATS • OVERALL PERFORMANCE'
+                    : _standingsTab == 2
+                        ? 'GOLDEN BOOT • LEAGUE TOP SCORERS'
+                        : _standingsTab == 3
+                            ? 'PLAYMAKER • LEAGUE TOP ASSISTS'
+                            : _standingsTab == 4
+                                ? 'CLEAN SHEETS • DEFENSIVE SHUTOUTS'
+                                : _standingsTab == 5
+                                    ? 'UEFA CHAMPIONS LEAGUE 2026/27'
+                                    : 'DOMESTIC CUPS • BRACKETS & STATS',
+            child: Column(
+              children: [
+                // 7-Tab selector
+                Container(
+                  padding: const EdgeInsets.all(3),
+                  margin: const EdgeInsets.only(bottom: 12),
+                  decoration: BoxDecoration(
+                    color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.05),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        _buildStandingsTabButton(
+                          tabIndex: 0,
+                          label: 'TABLE',
+                          icon: Icons.table_chart_rounded,
+                          isDark: isDark,
+                          ink: ink,
+                          inkMuted: inkMuted,
+                        ),
+                        const SizedBox(width: 4),
+                        _buildStandingsTabButton(
+                          tabIndex: 1,
+                          label: 'TEAM STATS',
+                          icon: Icons.analytics_rounded,
+                          isDark: isDark,
+                          ink: ink,
+                          inkMuted: inkMuted,
+                        ),
+                        const SizedBox(width: 4),
+                        _buildStandingsTabButton(
+                          tabIndex: 2,
+                          label: 'SCORERS',
+                          icon: Icons.military_tech_rounded,
+                          isDark: isDark,
+                          ink: ink,
+                          inkMuted: inkMuted,
+                        ),
+                        const SizedBox(width: 4),
+                        _buildStandingsTabButton(
+                          tabIndex: 3,
+                          label: 'ASSISTS',
+                          icon: Icons.auto_awesome_rounded,
+                          isDark: isDark,
+                          ink: ink,
+                          inkMuted: inkMuted,
+                        ),
+                        const SizedBox(width: 4),
+                        _buildStandingsTabButton(
+                          tabIndex: 4,
+                          label: 'CLEAN SHEETS',
+                          icon: Icons.shield_rounded,
+                          isDark: isDark,
+                          ink: ink,
+                          inkMuted: inkMuted,
+                        ),
+                        const SizedBox(width: 4),
+                        _buildStandingsTabButton(
+                          tabIndex: 5,
+                          label: 'UCL',
+                          icon: Icons.emoji_events_rounded,
+                          isDark: isDark,
+                          ink: ink,
+                          inkMuted: inkMuted,
+                        ),
+                        const SizedBox(width: 4),
+                        _buildStandingsTabButton(
+                          tabIndex: 6,
+                          label: 'CUPS',
+                          icon: Icons.workspace_premium_rounded,
+                          isDark: isDark,
+                          ink: ink,
+                          inkMuted: inkMuted,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+                if (_standingsTab == 0)
+                  Table(
+                    columnWidths: const {
+                      0: FlexColumnWidth(0.6), // Pos
+                      1: FlexColumnWidth(3.0), // Club
+                      2: FlexColumnWidth(0.8), // P
+                      3: FlexColumnWidth(0.8), // W
+                      4: FlexColumnWidth(0.8), // D
+                      5: FlexColumnWidth(0.8), // L
+                      6: FlexColumnWidth(1.0), // GD
+                      7: FlexColumnWidth(1.1), // PTS
+                    },
+                    defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+                    children: [
+                      TableRow(
+                        children: [
+                          _headerCell('#', inkMuted),
+                          _headerCell('CLUB', inkMuted, align: TextAlign.left),
+                          _headerCell('P', inkMuted),
+                          _headerCell('W', inkMuted),
+                          _headerCell('D', inkMuted),
+                          _headerCell('L', inkMuted),
+                          _headerCell('GD', inkMuted),
+                          _headerCell('PTS', inkMuted),
+                        ],
+                      ),
+                      ...List.generate(_leagueTable.length, (idx) {
+                        final t = _leagueTable[idx];
+                        final isUser = t.clubName == _userClub;
+                        final rowInk = isUser ? AppPalette.darkAccent : ink;
+
+                        return TableRow(
+                          decoration: isUser
+                              ? BoxDecoration(color: AppPalette.darkAccent.withValues(alpha: 0.08))
+                              : null,
+                          children: [
+                            _cell('${idx + 1}', inkMuted),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 6),
+                              child: Text(
+                                t.clubName,
+                                style: TextStyle(
+                                  fontFamily: AppTypography.fontFamily,
+                                  fontSize: 12,
+                                  fontWeight: isUser ? FontWeight.w800 : FontWeight.w500,
+                                  color: rowInk,
+                                ),
+                              ),
+                            ),
+                            _cell('${t.played}', inkMuted),
+                            _cell('${t.won}', inkMuted),
+                            _cell('${t.drawn}', inkMuted),
+                            _cell('${t.lost}', inkMuted),
+                            _cell('${t.goalDifference >= 0 ? "+" : ""}${t.goalDifference}', rowInk),
+                            _cell('${t.points}', rowInk, isBold: true),
+                          ],
+                        );
+                      }),
+                    ],
+                  )
+                else if (_standingsTab == 1)
+                  _buildTeamStatsTable(isDark, ink, inkMuted, activeLeague)
+                else if (_standingsTab == 2)
+                  _buildGoldenBootTable(isDark, ink, inkMuted, activeLeague)
+                else if (_standingsTab == 3)
+                  _buildAssistsTable(isDark, ink, inkMuted, activeLeague)
+                else if (_standingsTab == 4)
+                  _buildCleanSheetsTable(isDark, ink, inkMuted, activeLeague)
+                else if (_standingsTab == 5)
+                  _buildUclStandings(isDark, ink, inkMuted, activeLeague)
+                else
+                  _buildCupsStandings(isDark, ink, inkMuted, activeLeague),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Tab 4: Results Hub — Matchday Scoreboard, Spotlights & Detailed Reports
+  Widget _buildResultsTab(bool isDark, Color ink, Color inkMuted, LeagueDefinition activeLeague) {
+    if (_recentResults.isEmpty && _recentUclResults.isEmpty && _recentFaCupResults.isEmpty && _recentCarabaoResults.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: AppPalette.gold.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.scoreboard_rounded, color: AppPalette.gold, size: 48),
               ),
               const SizedBox(height: 16),
+              Text(
+                'NO MATCHDAY RESULTS YET',
+                style: AppTypography.titleMedium(ink).copyWith(fontWeight: FontWeight.w800, letterSpacing: 0.8),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Simulate Matchday 1 from the MATCHES tab to view full league scorelines, player ratings, goal events, and Man of the Match honors.',
+                textAlign: TextAlign.center,
+                style: AppTypography.bodySmall(inkMuted),
+              ),
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                onPressed: () => _jumpToTab(0),
+                icon: const Icon(Icons.arrow_back_rounded, size: 16),
+                label: const Text('Go to Matches Tab'),
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppPalette.gold,
+                  foregroundColor: isDark ? AppPalette.darkBg : Colors.white,
+                ),
+              ),
             ],
+          ),
+        ),
+      );
+    }
 
-            // League Table, Team Stats, Golden Boot, Assists, Clean Sheets & UCL (Issue #3, #7, #8, Fix 22)
-            AlmanacCard(
-              sectionTitle: _standingsTab == 0
-                  ? '${activeLeague.divisionTitle.toUpperCase()} STANDINGS'
-                  : _standingsTab == 1
-                      ? 'LEAGUE TEAM STATS • OVERALL PERFORMANCE'
-                      : _standingsTab == 2
-                          ? 'GOLDEN BOOT • LEAGUE TOP SCORERS'
-                          : _standingsTab == 3
-                              ? 'PLAYMAKER • LEAGUE TOP ASSISTS'
-                              : _standingsTab == 4
-                                  ? 'CLEAN SHEETS • DEFENSIVE SHUTOUTS'
-                                  : _standingsTab == 5
-                                      ? 'UEFA CHAMPIONS LEAGUE 2026/27'
-                                      : 'DOMESTIC CUPS • BRACKETS & STATS',
-              child: Column(
-                children: [
-                  // 7-Tab selector
+    final displayLeague = List<MatchResult>.from(_recentResults)..sort((a, b) {
+      final aUser = a.homeClub == _userClub || a.awayClub == _userClub;
+      final bUser = b.homeClub == _userClub || b.awayClub == _userClub;
+      if (aUser && !bUser) return -1;
+      if (!aUser && bUser) return 1;
+      return 0;
+    });
+
+    final displayUcl = List<MatchResult>.from(_recentUclResults)..sort((a, b) {
+      final aUser = a.homeClub == _userClub || a.awayClub == _userClub;
+      final bUser = b.homeClub == _userClub || b.awayClub == _userClub;
+      if (aUser && !bUser) return -1;
+      if (!aUser && bUser) return 1;
+      return 0;
+    });
+
+    final displayFa = List<MatchResult>.from(_recentFaCupResults)..sort((a, b) {
+      final aUser = a.homeClub == _userClub || a.awayClub == _userClub;
+      final bUser = b.homeClub == _userClub || b.awayClub == _userClub;
+      if (aUser && !bUser) return -1;
+      if (!aUser && bUser) return 1;
+      return 0;
+    });
+
+    final displayCarabao = List<MatchResult>.from(_recentCarabaoResults)..sort((a, b) {
+      final aUser = a.homeClub == _userClub || a.awayClub == _userClub;
+      final bUser = b.homeClub == _userClub || b.awayClub == _userClub;
+      if (aUser && !bUser) return -1;
+      if (!aUser && bUser) return 1;
+      return 0;
+    });
+
+    // User matches
+    final userLeagueMatches = displayLeague.where((m) => m.homeClub == _userClub || m.awayClub == _userClub);
+    final userLeagueMatch = userLeagueMatches.isNotEmpty ? userLeagueMatches.first : null;
+
+    final userUclMatches = displayUcl.where((m) => m.homeClub == _userClub || m.awayClub == _userClub);
+    final userUclMatch = userUclMatches.isNotEmpty ? userUclMatches.first : null;
+
+    final userFaMatches = displayFa.where((m) => m.homeClub == _userClub || m.awayClub == _userClub);
+    final userFaMatch = userFaMatches.isNotEmpty ? userFaMatches.first : null;
+
+    final userCarabaoMatches = displayCarabao.where((m) => m.homeClub == _userClub || m.awayClub == _userClub);
+    final userCarabaoMatch = userCarabaoMatches.isNotEmpty ? userCarabaoMatches.first : null;
+
+    final hasUcl = _recentUclResults.isNotEmpty;
+    final hasFa = _recentFaCupResults.isNotEmpty;
+    final hasCarabao = _recentCarabaoResults.isNotEmpty;
+    final hasMultipleComps = hasUcl || hasFa || hasCarabao;
+
+    List<MatchResult> currentResultsList = displayLeague;
+    String currentCompName = activeLeague.name.toUpperCase();
+    MatchResult? currentUserMatch = userLeagueMatch;
+
+    if (_resultsCompTab == 1 && hasUcl) {
+      currentResultsList = displayUcl;
+      currentCompName = 'UEFA CHAMPIONS LEAGUE';
+      currentUserMatch = userUclMatch;
+    } else if (_resultsCompTab == 2 && hasFa) {
+      currentResultsList = displayFa;
+      currentCompName = 'THE EMIRATES FA CUP';
+      currentUserMatch = userFaMatch;
+    } else if (_resultsCompTab == 3 && hasCarabao) {
+      currentResultsList = displayCarabao;
+      currentCompName = 'CARABAO CUP';
+      currentUserMatch = userCarabaoMatch;
+    }
+
+    final theme = Theme.of(context);
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      physics: const BouncingScrollPhysics(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          AlmanacCard(
+            sectionTitle: 'MATCHDAY ${_currentGameweek - 1} SCOREBOARD & REPORT',
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // 1. TOP SPOTLIGHT: YOUR CLUB MATCHES THIS MATCHDAY
+                if (userLeagueMatch != null || userUclMatch != null || userFaMatch != null || userCarabaoMatch != null) ...[
+                  if (userLeagueMatch != null) ...[
+                    _buildMatchResultTile(
+                      m: userLeagueMatch,
+                      isDark: isDark,
+                      ink: ink,
+                      inkMuted: inkMuted,
+                      activeLeague: activeLeague,
+                      competitionName: activeLeague.name.toUpperCase(),
+                    ),
+                  ],
+                  if (userUclMatch != null) ...[
+                    const SizedBox(height: 8),
+                    _buildMatchResultTile(
+                      m: userUclMatch,
+                      isDark: isDark,
+                      ink: ink,
+                      inkMuted: inkMuted,
+                      activeLeague: activeLeague,
+                      competitionName: 'UEFA CHAMPIONS LEAGUE',
+                    ),
+                  ],
+                  if (userFaMatch != null) ...[
+                    const SizedBox(height: 8),
+                    _buildMatchResultTile(
+                      m: userFaMatch,
+                      isDark: isDark,
+                      ink: ink,
+                      inkMuted: inkMuted,
+                      activeLeague: activeLeague,
+                      competitionName: 'THE EMIRATES FA CUP',
+                    ),
+                  ],
+                  if (userCarabaoMatch != null) ...[
+                    const SizedBox(height: 8),
+                    _buildMatchResultTile(
+                      m: userCarabaoMatch,
+                      isDark: isDark,
+                      ink: ink,
+                      inkMuted: inkMuted,
+                      activeLeague: activeLeague,
+                      competitionName: 'CARABAO CUP',
+                    ),
+                  ],
+                  const SizedBox(height: 12),
+                ],
+
+                // 2. COMPETITION TOGGLE SWITCHER (if cup/continental matches were played this gameweek)
+                if (hasMultipleComps) ...[
                   Container(
                     padding: const EdgeInsets.all(3),
                     margin: const EdgeInsets.only(bottom: 12),
                     decoration: BoxDecoration(
-                      color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.05),
+                      color: isDark ? Colors.white.withValues(alpha: 0.06) : Colors.black.withValues(alpha: 0.05),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: SingleChildScrollView(
                       scrollDirection: Axis.horizontal,
                       child: Row(
                         children: [
-                          _buildStandingsTabButton(
+                          _buildResultCompTabButton(
                             tabIndex: 0,
-                            label: 'TABLE',
-                            icon: Icons.table_chart_rounded,
+                            label: '${activeLeague.clubCodes[_userClub] ?? 'LEAGUE'} (${displayLeague.length})',
+                            icon: Icons.sports_soccer_rounded,
                             isDark: isDark,
                             ink: ink,
                             inkMuted: inkMuted,
                           ),
-                          const SizedBox(width: 4),
-                          _buildStandingsTabButton(
-                            tabIndex: 1,
-                            label: 'TEAM STATS',
-                            icon: Icons.analytics_rounded,
-                            isDark: isDark,
-                            ink: ink,
-                            inkMuted: inkMuted,
-                          ),
-                          const SizedBox(width: 4),
-                          _buildStandingsTabButton(
-                            tabIndex: 2,
-                            label: 'SCORERS',
-                            icon: Icons.military_tech_rounded,
-                            isDark: isDark,
-                            ink: ink,
-                            inkMuted: inkMuted,
-                          ),
-                          const SizedBox(width: 4),
-                          _buildStandingsTabButton(
-                            tabIndex: 3,
-                            label: 'ASSISTS',
-                            icon: Icons.auto_awesome_rounded,
-                            isDark: isDark,
-                            ink: ink,
-                            inkMuted: inkMuted,
-                          ),
-                          const SizedBox(width: 4),
-                          _buildStandingsTabButton(
-                            tabIndex: 4,
-                            label: 'CLEAN SHEETS',
-                            icon: Icons.shield_rounded,
-                            isDark: isDark,
-                            ink: ink,
-                            inkMuted: inkMuted,
-                          ),
-                          const SizedBox(width: 4),
-                          _buildStandingsTabButton(
-                            tabIndex: 5,
-                            label: 'UCL',
-                            icon: Icons.emoji_events_rounded,
-                            isDark: isDark,
-                            ink: ink,
-                            inkMuted: inkMuted,
-                          ),
-                          const SizedBox(width: 4),
-                          _buildStandingsTabButton(
-                            tabIndex: 6,
-                            label: 'CUPS',
-                            icon: Icons.workspace_premium_rounded,
-                            isDark: isDark,
-                            ink: ink,
-                            inkMuted: inkMuted,
-                          ),
+                          if (hasUcl) ...[
+                            const SizedBox(width: 4),
+                            _buildResultCompTabButton(
+                              tabIndex: 1,
+                              label: 'UCL (${displayUcl.length})',
+                              icon: Icons.star_rounded,
+                              isDark: isDark,
+                              ink: ink,
+                              inkMuted: inkMuted,
+                              isUcl: true,
+                            ),
+                          ],
+                          if (hasFa) ...[
+                            const SizedBox(width: 4),
+                            _buildResultCompTabButton(
+                              tabIndex: 2,
+                              label: 'FA CUP (${displayFa.length})',
+                              icon: Icons.workspace_premium_rounded,
+                              isDark: isDark,
+                              ink: ink,
+                              inkMuted: inkMuted,
+                            ),
+                          ],
+                          if (hasCarabao) ...[
+                            const SizedBox(width: 4),
+                            _buildResultCompTabButton(
+                              tabIndex: 3,
+                              label: 'CARABAO (${displayCarabao.length})',
+                              icon: Icons.shield_rounded,
+                              isDark: isDark,
+                              ink: ink,
+                              inkMuted: inkMuted,
+                            ),
+                          ],
                         ],
                       ),
                     ),
                   ),
-
-                  if (_standingsTab == 0)
-                    Table(
-                      columnWidths: const {
-                        0: FlexColumnWidth(0.6), // Pos
-                        1: FlexColumnWidth(3.0), // Club
-                        2: FlexColumnWidth(0.8), // P
-                        3: FlexColumnWidth(0.8), // W
-                        4: FlexColumnWidth(0.8), // D
-                        5: FlexColumnWidth(0.8), // L
-                        6: FlexColumnWidth(1.0), // GD
-                        7: FlexColumnWidth(1.1), // PTS
-                      },
-                      defaultVerticalAlignment: TableCellVerticalAlignment.middle,
-                      children: [
-                        TableRow(
-                          children: [
-                            _headerCell('#', inkMuted),
-                            _headerCell('CLUB', inkMuted, align: TextAlign.left),
-                            _headerCell('P', inkMuted),
-                            _headerCell('W', inkMuted),
-                            _headerCell('D', inkMuted),
-                            _headerCell('L', inkMuted),
-                            _headerCell('GD', inkMuted),
-                            _headerCell('PTS', inkMuted),
-                          ],
-                        ),
-                        ...List.generate(_leagueTable.length, (idx) {
-                          final t = _leagueTable[idx];
-                          final isUser = t.clubName == _userClub;
-                          final rowInk = isUser ? AppPalette.darkAccent : ink;
-
-                          return TableRow(
-                            decoration: isUser
-                                ? BoxDecoration(color: AppPalette.darkAccent.withValues(alpha: 0.08))
-                                : null,
-                            children: [
-                              _cell('${idx + 1}', inkMuted),
-                              Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 6),
-                                child: Text(
-                                  t.clubName,
-                                  style: TextStyle(
-                                    fontFamily: AppTypography.fontFamily,
-                                    fontSize: 12,
-                                    fontWeight: isUser ? FontWeight.w800 : FontWeight.w500,
-                                    color: rowInk,
-                                  ),
-                                ),
-                              ),
-                              _cell('${t.played}', inkMuted),
-                              _cell('${t.won}', inkMuted),
-                              _cell('${t.drawn}', inkMuted),
-                              _cell('${t.lost}', inkMuted),
-                              _cell('${t.goalDifference >= 0 ? "+" : ""}${t.goalDifference}', rowInk),
-                              _cell('${t.points}', rowInk, isBold: true),
-                            ],
-                          );
-                        }),
-                      ],
-                    )
-                  else if (_standingsTab == 1)
-                    _buildTeamStatsTable(isDark, ink, inkMuted, activeLeague)
-                  else if (_standingsTab == 2)
-                    _buildGoldenBootTable(isDark, ink, inkMuted, activeLeague)
-                  else if (_standingsTab == 3)
-                    _buildAssistsTable(isDark, ink, inkMuted, activeLeague)
-                  else if (_standingsTab == 4)
-                    _buildCleanSheetsTable(isDark, ink, inkMuted, activeLeague)
-                  else if (_standingsTab == 5)
-                    _buildUclStandings(isDark, ink, inkMuted, activeLeague)
-                  else
-                    _buildCupsStandings(isDark, ink, inkMuted, activeLeague),
                 ],
-              ),
+
+                // 3. SECTION HEADER FOR FIXTURES LIST
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Divider(
+                          color: theme.dividerColor.withValues(alpha: 0.3),
+                          height: 1,
+                          thickness: 0.5,
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        child: Text(
+                          _resultsCompTab == 1 && hasUcl
+                              ? 'ALL UCL MIDWEEK FIXTURES'
+                              : _resultsCompTab == 2 && hasFa
+                                  ? 'ALL FA CUP FIXTURES'
+                                  : _resultsCompTab == 3 && hasCarabao
+                                      ? 'ALL CARABAO CUP FIXTURES'
+                                      : 'AROUND THE LEAGUE',
+                          style: AppTypography.caption(inkMuted).copyWith(
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: Divider(
+                          color: theme.dividerColor.withValues(alpha: 0.3),
+                          height: 1,
+                          thickness: 0.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 6),
+
+                // 4. FIXTURES LIST (excluding already featured user match)
+                for (int idx = 0; idx < currentResultsList.length; idx++) ...[
+                  if (currentResultsList[idx] == currentUserMatch)
+                    const SizedBox.shrink()
+                  else ...[
+                    if (idx > 0)
+                      Divider(
+                        color: theme.dividerColor.withValues(alpha: 0.3),
+                        height: 16,
+                        thickness: 0.5,
+                      ),
+                    _buildMatchResultTile(
+                      m: currentResultsList[idx],
+                      isDark: isDark,
+                      ink: ink,
+                      inkMuted: inkMuted,
+                      activeLeague: activeLeague,
+                      competitionName: currentCompName,
+                    ),
+                  ],
+                ],
+              ],
             ),
+          ),
+        ],
+      ),
+    );
+  }
 
-            const SizedBox(height: 16),
-
-            // Squad Management Section (Starting XI vs Bench/Reserves, Auto-Pick, Swap & Sell)
-            _buildSquadManagementSection(isDark, ink, inkMuted, border),
+  /// Quick Action Tile helper for FIFA-style horizontal hubs (Fix 38)
+  Widget _buildQuickActionCard({
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required Color color,
+    required bool isDark,
+    required Color ink,
+    required Color inkMuted,
+    required VoidCallback onTap,
+    String? badge,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        width: 155,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: isDark ? AppPalette.darkCard : AppPalette.lightCard,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withValues(alpha: 0.35)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(icon, color: color, size: 18),
+                ),
+                if (badge != null)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: AppPalette.red,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      badge,
+                      style: const TextStyle(color: Colors.white, fontSize: 8.5, fontWeight: FontWeight.w800),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              title,
+              style: TextStyle(
+                fontFamily: AppTypography.fontFamily,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                color: ink,
+                letterSpacing: 0.3,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 2),
+            Text(
+              subtitle,
+              style: AppTypography.caption(inkMuted).copyWith(fontSize: 10),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
           ],
         ),
       ),
