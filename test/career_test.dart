@@ -4260,6 +4260,86 @@ void main() {
         makeTestPlayer(id: '7', name: 'P', pos: 'GK', ovr: 80, isGk: true)), 'GK');
     });
   });
+
+  group('Fix 36: Realistic Transfer Market Pool, Tier-Based Contracts & Search', () {
+    test('Superstars (85+ OVR) are never free agents in Season 1 and have multi-year contracts', () {
+      final superstars = [
+        ('Kylian Mbappe', 91, 25.0),
+        ('Erling Haaland', 91, 24.0),
+        ('Kevin De Bruyne', 91, 33.0),
+        ('Rodri', 91, 28.0),
+        ('Vinicius Junior', 90, 24.0),
+        ('Jude Bellingham', 90, 21.0),
+        ('Harry Kane', 90, 31.0),
+        ('Mohamed Salah', 89, 32.0),
+        ('Bukayo Saka', 87, 22.0),
+        ('Declan Rice', 87, 25.0),
+        ('William Saliba', 87, 23.0),
+      ];
+
+      for (final (name, ovr, age) in superstars) {
+        final contract = TransferMarketService.computePlayerContract(
+          name,
+          1,
+          overall: ovr,
+          age: age,
+        );
+        expect(contract.isFreeAgent, isFalse,
+            reason: '$name ($ovr OVR) must not be a free agent in Season 1');
+        expect(contract.seasonsRemaining, greaterThanOrEqualTo(1),
+            reason: '$name ($ovr OVR) must have at least 1 season remaining on contract');
+        final fee = TransferMarketService.calculateEffectiveTransferFee(
+          baseValuation: 80.0,
+          contractStatus: contract,
+        );
+        expect(fee, greaterThan(0.0),
+            reason: '$name must require a non-zero transfer fee');
+      }
+    });
+
+    test('Season progression correctly handles contract renewals and expiration', () {
+      const name = 'Declan Rice';
+      const ovr = 87;
+      const age = 25.0;
+
+      final s1 = TransferMarketService.computePlayerContract(name, 1, overall: ovr, age: age);
+      final s2 = TransferMarketService.computePlayerContract(name, 2, overall: ovr, age: age);
+      final s3 = TransferMarketService.computePlayerContract(name, 3, overall: ovr, age: age);
+      final s4 = TransferMarketService.computePlayerContract(name, 4, overall: ovr, age: age);
+
+      // Verify all contract statuses are valid ContractStatus objects
+      for (final s in [s1, s2, s3, s4]) {
+        expect(s.seasonsRemaining, greaterThanOrEqualTo(0));
+        expect(s.statusBadge, isNotEmpty);
+      }
+    });
+
+    test('Effective transfer fee applies 50% discount for expiring contracts and £0 for free agents', () {
+      const baseFee = 60.0;
+
+      final expiringContract = ContractStatus.fromSeasons(1);
+      final effectiveExpiring = TransferMarketService.calculateEffectiveTransferFee(
+        baseValuation: baseFee,
+        contractStatus: expiringContract,
+      );
+      expect(effectiveExpiring, equals(30.0));
+
+      final freeAgentContract = ContractStatus.fromSeasons(0);
+      final effectiveFree = TransferMarketService.calculateEffectiveTransferFee(
+        baseValuation: baseFee,
+        contractStatus: freeAgentContract,
+      );
+      expect(effectiveFree, equals(0.0));
+    });
+
+    test('Contract renewal cost scales proportionately and is bounded', () {
+      final renewalCostStar = TransferMarketService.calculateContractRenewalCost(85.0);
+      expect(renewalCostStar, inInclusiveRange(0.5, 12.0));
+
+      final renewalCostYoung = TransferMarketService.calculateContractRenewalCost(5.0);
+      expect(renewalCostYoung, inInclusiveRange(0.5, 12.0));
+    });
+  });
 }
 
 

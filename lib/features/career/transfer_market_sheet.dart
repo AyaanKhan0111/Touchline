@@ -59,6 +59,10 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
   final TextEditingController _searchController = TextEditingController();
   MarketCategory _selectedCategory = MarketCategory.all;
   String _selectedPositionGroup = 'ALL'; // ALL, GK, DEF, MID, FWD
+  String _selectedRatingTier = 'ALL'; // ALL, 85+, 80-84, 75-79, 70-74, <70
+  String _sortBy = 'OVR_DESC'; // OVR_DESC, OVR_ASC, VAL_ASC, VAL_DESC, AGE_ASC, NAME_ASC
+  int _displayLimit = 100;
+  bool _hasMore = true;
   List<Player> _players = [];
   bool _isLoading = true;
   late double _currentBudget;
@@ -91,10 +95,19 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
     if (qLower.isEmpty) return true;
     if (p.name.toLowerCase().contains(qLower)) return true;
     if (p.nationality?.toLowerCase().contains(qLower) ?? false) return true;
+    if (p.teamName.toLowerCase().contains(qLower)) return true;
+    if (p.primaryPosition.toLowerCase() == qLower) return true;
     final isOwned = _ownedPlayerNames.contains(p.name.trim().toLowerCase());
-    final contractStatus = TransferMarketService.computePlayerContract(p.name, widget.currentSeason);
+    final contractStatus = TransferMarketService.computePlayerContract(
+      p.name,
+      widget.currentSeason,
+      overall: p.overall,
+      age: p.age,
+    );
     final activeClub = _resolvePlayerClub(p, isOwned: isOwned, contractStatus: contractStatus);
-    return activeClub.toLowerCase().contains(qLower);
+    if (activeClub.toLowerCase().contains(qLower)) return true;
+    if (contractStatus.statusBadge.toLowerCase().contains(qLower)) return true;
+    return false;
   }
 
   @override
@@ -107,105 +120,170 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
   void _onSearchChanged(String text) {
     _debounce?.cancel();
     _debounce = Timer(const Duration(milliseconds: 300), () {
+      _displayLimit = 100;
       _loadPlayers();
     });
   }
 
-  Future<void> _loadPlayers() async {
-    setState(() => _isLoading = true);
+  Future<void> _loadPlayers({bool append = false}) async {
+    if (!append) {
+      setState(() => _isLoading = true);
+    }
 
     try {
       final db = await DatabaseService.instance.database;
+
+      // 1. Position filter
       String posWhere = '';
       if (_selectedPositionGroup == 'GK') {
         posWhere = " AND primary_position = 'GK'";
       } else if (_selectedPositionGroup == 'DEF') {
-        posWhere = " AND primary_position IN ('CB', 'LB', 'RB', 'LWB', 'RWB')";
+        posWhere = " AND primary_position IN ('CB', 'LB', 'RB', 'LWB', 'RWB', 'LCB', 'RCB')";
       } else if (_selectedPositionGroup == 'MID') {
-        posWhere = " AND primary_position IN ('CM', 'CAM', 'CDM', 'LM', 'RM')";
+        posWhere = " AND primary_position IN ('CM', 'CAM', 'CDM', 'LM', 'RM', 'LCM', 'RCM', 'LDM', 'RDM', 'AM')";
       } else if (_selectedPositionGroup == 'FWD') {
-        posWhere = " AND primary_position IN ('ST', 'CF', 'LW', 'RW')";
+        posWhere = " AND primary_position IN ('ST', 'CF', 'LW', 'RW', 'RF', 'LF', 'SS')";
       }
 
+      // 2. Rating tier filter (Fix 36: Full database access with all rating tiers)
+      String ratingWhere = '';
+      if (_selectedRatingTier == '85+') {
+        ratingWhere = " AND overall >= 85";
+      } else if (_selectedRatingTier == '80-84') {
+        ratingWhere = " AND overall BETWEEN 80 AND 84";
+      } else if (_selectedRatingTier == '75-79') {
+        ratingWhere = " AND overall BETWEEN 75 AND 79";
+      } else if (_selectedRatingTier == '70-74') {
+        ratingWhere = " AND overall BETWEEN 70 AND 74";
+      } else if (_selectedRatingTier == '<70') {
+        ratingWhere = " AND overall < 70";
+      }
+
+      // 3. Search query (Fix 36: Fixed player_name_clean crash; searches player_name, team_name, nationality)
       final query = _searchController.text.trim();
       final searchClause = query.isNotEmpty
-          ? " AND (player_name LIKE ? OR player_name_clean LIKE ? OR team_name LIKE ?)"
+          ? " AND (player_name LIKE ? OR team_name LIKE ? OR nationality LIKE ?)"
           : "";
       final searchParams = query.isNotEmpty
           ? ['%$query%', '%$query%', '%$query%']
           : <Object>[];
+
+      // 4. Sort order
+      String orderBy = 'p.overall DESC, p.player_name ASC';
+      if (_sortBy == 'OVR_ASC') {
+        orderBy = 'p.overall ASC, p.player_name ASC';
+      } else if (_sortBy == 'VAL_ASC') {
+        orderBy = 'p.overall ASC, p.age DESC';
+      } else if (_sortBy == 'VAL_DESC') {
+        orderBy = 'p.overall DESC, p.age ASC';
+      } else if (_sortBy == 'AGE_ASC') {
+        orderBy = 'COALESCE(p.age, 25) ASC, p.overall DESC';
+      } else if (_sortBy == 'NAME_ASC') {
+        orderBy = 'p.player_name ASC';
+      }
+
+      final int fetchCandidateLimit = (_selectedCategory == MarketCategory.freeAgents ||
+              _selectedCategory == MarketCategory.expiring)
+          ? (_displayLimit * 6).clamp(350, 2000)
+          : _displayLimit;
 
       List<Player> loaded = [];
 
       switch (_selectedCategory) {
         case MarketCategory.all:
           final rows = await db.rawQuery('''
-            SELECT *
-            FROM players
-            WHERE season >= 2022 $posWhere $searchClause
-            ORDER BY overall DESC, season DESC
-          ''', searchParams);
-          final seenAll = <String>{};
-          for (final r in rows) {
-            final p = Player.fromMap(r);
-            if (seenAll.add(p.name.trim().toLowerCase())) {
-              loaded.add(p);
-              if (loaded.length == 60) break;
-            }
-          }
-          if (loaded.isEmpty && query.isNotEmpty) {
-            final fallbackRows = await db.rawQuery('''
-              SELECT *
+            WITH ranked AS (
+              SELECT rowid, ROW_NUMBER() OVER (
+                PARTITION BY player_name
+                ORDER BY
+                  (mode != 'Nations Cup') DESC,
+                  overall DESC,
+                  season DESC
+              ) as rn
               FROM players
-              WHERE 1=1 $posWhere $searchClause
-              ORDER BY overall DESC, season DESC
-            ''', searchParams);
-            for (final r in fallbackRows) {
-              final p = Player.fromMap(r);
-              if (seenAll.add(p.name.trim().toLowerCase())) {
-                loaded.add(p);
-                if (loaded.length == 60) break;
-              }
-            }
+              WHERE 1=1 $posWhere $ratingWhere $searchClause
+            )
+            SELECT p.*
+            FROM players p
+            JOIN ranked r ON p.rowid = r.rowid
+            WHERE r.rn = 1
+            ORDER BY $orderBy
+            LIMIT $fetchCandidateLimit
+          ''', searchParams);
+
+          for (final r in rows) {
+            loaded.add(Player.fromMap(r));
           }
           break;
 
         case MarketCategory.freeAgents:
           final rows = await db.rawQuery('''
-            SELECT *
-            FROM players
-            WHERE season >= 2022 $posWhere $searchClause
-            ORDER BY overall DESC, season DESC
+            WITH ranked AS (
+              SELECT rowid, ROW_NUMBER() OVER (
+                PARTITION BY player_name
+                ORDER BY
+                  (mode != 'Nations Cup') DESC,
+                  overall DESC,
+                  season DESC
+              ) as rn
+              FROM players
+              WHERE 1=1 $posWhere $ratingWhere $searchClause
+            )
+            SELECT p.*
+            FROM players p
+            JOIN ranked r ON p.rowid = r.rowid
+            WHERE r.rn = 1
+            ORDER BY $orderBy
+            LIMIT $fetchCandidateLimit
           ''', searchParams);
-          final seenFree = <String>{};
+
           for (final r in rows) {
             final p = Player.fromMap(r);
-            if (seenFree.add(p.name.trim().toLowerCase())) {
-              final status = TransferMarketService.computePlayerContract(p.name, widget.currentSeason);
-              if (status.isFreeAgent) {
-                loaded.add(p);
-                if (loaded.length == 60) break;
-              }
+            final status = TransferMarketService.computePlayerContract(
+              p.name,
+              widget.currentSeason,
+              overall: p.overall,
+              age: p.age,
+            );
+            if (status.isFreeAgent) {
+              loaded.add(p);
+              if (loaded.length >= _displayLimit) break;
             }
           }
           break;
 
         case MarketCategory.expiring:
           final rows = await db.rawQuery('''
-            SELECT *
-            FROM players
-            WHERE season >= 2022 $posWhere $searchClause
-            ORDER BY overall DESC, season DESC
+            WITH ranked AS (
+              SELECT rowid, ROW_NUMBER() OVER (
+                PARTITION BY player_name
+                ORDER BY
+                  (mode != 'Nations Cup') DESC,
+                  overall DESC,
+                  season DESC
+              ) as rn
+              FROM players
+              WHERE 1=1 $posWhere $ratingWhere $searchClause
+            )
+            SELECT p.*
+            FROM players p
+            JOIN ranked r ON p.rowid = r.rowid
+            WHERE r.rn = 1
+            ORDER BY $orderBy
+            LIMIT $fetchCandidateLimit
           ''', searchParams);
-          final seenExp = <String>{};
+
           for (final r in rows) {
             final p = Player.fromMap(r);
-            if (seenExp.add(p.name.trim().toLowerCase())) {
-              final status = TransferMarketService.computePlayerContract(p.name, widget.currentSeason);
-              if (status.isExpiring) {
-                loaded.add(p);
-                if (loaded.length == 60) break;
-              }
+            final status = TransferMarketService.computePlayerContract(
+              p.name,
+              widget.currentSeason,
+              overall: p.overall,
+              age: p.age,
+            );
+            if (status.isExpiring) {
+              loaded.add(p);
+              if (loaded.length >= _displayLimit) break;
             }
           }
           break;
@@ -217,66 +295,96 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
                 if (query.isNotEmpty) {
                   final qLower = query.toLowerCase();
                   if (!p.name.toLowerCase().contains(qLower) &&
-                      !(p.nationality?.toLowerCase().contains(qLower) ?? false)) {
+                      !(p.nationality?.toLowerCase().contains(qLower) ?? false) &&
+                      !p.teamName.toLowerCase().contains(qLower)) {
                     return false;
                   }
                 }
                 if (_selectedPositionGroup == 'GK') return p.primaryPosition == 'GK';
-                if (_selectedPositionGroup == 'DEF') return const ['CB', 'LB', 'RB', 'LWB', 'RWB'].contains(p.primaryPosition);
-                if (_selectedPositionGroup == 'MID') return const ['CM', 'CAM', 'CDM', 'LM', 'RM'].contains(p.primaryPosition);
-                if (_selectedPositionGroup == 'FWD') return const ['ST', 'CF', 'LW', 'RW'].contains(p.primaryPosition);
+                if (_selectedPositionGroup == 'DEF') return const ['CB', 'LB', 'RB', 'LWB', 'RWB', 'LCB', 'RCB'].contains(p.primaryPosition);
+                if (_selectedPositionGroup == 'MID') return const ['CM', 'CAM', 'CDM', 'LM', 'RM', 'LCM', 'RCM', 'LDM', 'RDM', 'AM'].contains(p.primaryPosition);
+                if (_selectedPositionGroup == 'FWD') return const ['ST', 'CF', 'LW', 'RW', 'RF', 'LF', 'SS'].contains(p.primaryPosition);
                 return true;
               }).toList();
 
-          // 2. Database wonderkids
+          // 2. Database wonderkids across full database
           final rows = await db.rawQuery('''
-            SELECT *
-            FROM players
-            WHERE season >= 2022 AND age <= 21 AND potential >= 80 $posWhere $searchClause
-            ORDER BY potential DESC, overall DESC, season DESC
+            WITH ranked AS (
+              SELECT rowid, ROW_NUMBER() OVER (
+                PARTITION BY player_name
+                ORDER BY
+                  (mode != 'Nations Cup') DESC,
+                  overall DESC,
+                  season DESC
+              ) as rn
+              FROM players
+              WHERE age <= 21 AND potential >= 78 $posWhere $ratingWhere $searchClause
+            )
+            SELECT p.*
+            FROM players p
+            JOIN ranked r ON p.rowid = r.rowid
+            WHERE r.rn = 1
+            ORDER BY p.potential DESC, p.overall DESC
+            LIMIT $fetchCandidateLimit
           ''', searchParams);
 
           final seen = <String>{};
           for (final p in academy) {
-            seen.add(p.name.trim().toLowerCase());
-            loaded.add(p);
+            if (seen.add(p.name.trim().toLowerCase())) {
+              loaded.add(p);
+            }
           }
           for (final r in rows) {
             final p = Player.fromMap(r);
             if (seen.add(p.name.trim().toLowerCase())) {
               loaded.add(p);
-              if (loaded.length >= 60) break;
+              if (loaded.length >= _displayLimit) break;
             }
           }
           break;
 
         case MarketCategory.valueGems:
           final rows = await db.rawQuery('''
-            SELECT *
-            FROM players
-            WHERE season >= 2022 AND overall BETWEEN 73 AND 83 $posWhere $searchClause
-            ORDER BY overall DESC, season DESC
+            WITH ranked AS (
+              SELECT rowid, ROW_NUMBER() OVER (
+                PARTITION BY player_name
+                ORDER BY
+                  (mode != 'Nations Cup') DESC,
+                  overall DESC,
+                  season DESC
+              ) as rn
+              FROM players
+              WHERE 1=1 $posWhere $ratingWhere $searchClause
+            )
+            SELECT p.*
+            FROM players p
+            JOIN ranked r ON p.rowid = r.rowid
+            WHERE r.rn = 1
+            ORDER BY $orderBy
+            LIMIT ${fetchCandidateLimit * 2}
           ''', searchParams);
-          final seenGems = <String>{};
+
           for (final r in rows) {
             final p = Player.fromMap(r);
-            if (seenGems.add(p.name.trim().toLowerCase())) {
-              if (calculatePlayerValuation(p) <= 15.0) {
-                loaded.add(p);
-                if (loaded.length == 60) break;
-              }
+            if (calculatePlayerValuation(p) <= 15.0) {
+              loaded.add(p);
+              if (loaded.length >= _displayLimit) break;
             }
           }
           break;
       }
+
       if (query.isNotEmpty) {
         final qLower = query.toLowerCase();
         loaded = loaded.where((p) => _matchesSearch(p, qLower)).toList();
       }
 
+      final hasMore = loaded.length >= _displayLimit;
+
       if (mounted) {
         setState(() {
           _players = loaded;
+          _hasMore = hasMore;
           _isLoading = false;
         });
       }
@@ -632,6 +740,96 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
           ),
 
           const SizedBox(height: 8),
+
+          // Rating Tier Filter Chips (Fix 36: Full DB with rating tiers)
+          SizedBox(
+            height: 28,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              children: [
+                _buildRatingChip('ALL', 'All Ratings'),
+                const SizedBox(width: 6),
+                _buildRatingChip('85+', '85+ Elite'),
+                const SizedBox(width: 6),
+                _buildRatingChip('80-84', '80-84 Top'),
+                const SizedBox(width: 6),
+                _buildRatingChip('75-79', '75-79 Solid'),
+                const SizedBox(width: 6),
+                _buildRatingChip('70-74', '70-74 Squad'),
+                const SizedBox(width: 6),
+                _buildRatingChip('<70', '<70 Prospects'),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 8),
+
+          // Market Stats & Sort Header
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  '${_players.length} PLAYERS AVAILABLE',
+                  style: TextStyle(
+                    fontFamily: AppTypography.bodyFamily,
+                    fontSize: 10.5,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 0.8,
+                    color: inkMuted,
+                  ),
+                ),
+                PopupMenuButton<String>(
+                  initialValue: _sortBy,
+                  tooltip: 'Sort Players',
+                  onSelected: (val) {
+                    if (val != _sortBy) {
+                      setState(() => _sortBy = val);
+                      _loadPlayers();
+                    }
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
+                    decoration: BoxDecoration(
+                      color: isDark ? AppPalette.darkSurfaceRaised : AppPalette.lightSurfaceRaised,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: border),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.sort_rounded, size: 12, color: AppPalette.gold),
+                        const SizedBox(width: 4),
+                        Text(
+                          _getSortLabel(_sortBy),
+                          style: TextStyle(
+                            fontFamily: AppTypography.bodyFamily,
+                            fontSize: 10.5,
+                            fontWeight: FontWeight.w700,
+                            color: ink,
+                          ),
+                        ),
+                        const SizedBox(width: 2),
+                        Icon(Icons.arrow_drop_down_rounded, size: 15, color: inkMuted),
+                      ],
+                    ),
+                  ),
+                  itemBuilder: (context) => [
+                    const PopupMenuItem(value: 'OVR_DESC', child: Text('Rating: High to Low')),
+                    const PopupMenuItem(value: 'OVR_ASC', child: Text('Rating: Low to High')),
+                    const PopupMenuItem(value: 'VAL_DESC', child: Text('Value: High to Low')),
+                    const PopupMenuItem(value: 'VAL_ASC', child: Text('Value: Low to High')),
+                    const PopupMenuItem(value: 'AGE_ASC', child: Text('Age: Youngest First')),
+                    const PopupMenuItem(value: 'NAME_ASC', child: Text('Name: A to Z')),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 6),
           Divider(color: border, height: 1),
 
           // Player List
@@ -656,9 +854,35 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
                       )
                     : ListView.separated(
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                        itemCount: _players.length,
+                        itemCount: _players.length + (_hasMore ? 1 : 0),
                         separatorBuilder: (context, index) => Divider(color: border.withValues(alpha: 0.4), height: 1),
                         itemBuilder: (context, index) {
+                          if (index == _players.length) {
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              child: Center(
+                                child: OutlinedButton.icon(
+                                  onPressed: () {
+                                    _displayLimit += 50;
+                                    _loadPlayers(append: true);
+                                  },
+                                  icon: const Icon(Icons.expand_more_rounded, size: 18),
+                                  label: const Text('LOAD MORE PLAYERS (+50)'),
+                                  style: OutlinedButton.styleFrom(
+                                    foregroundColor: AppPalette.gold,
+                                    side: const BorderSide(color: AppPalette.gold),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                    textStyle: const TextStyle(
+                                      fontFamily: AppTypography.bodyFamily,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            );
+                          }
+
                           final player = _players[index];
                           final normName = player.name.trim().toLowerCase();
                           final isOwned = _ownedPlayerNames.contains(normName);
@@ -681,7 +905,12 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
                                       statusBadge: '1 YR (50% OFF)',
                                       badgeColor: AppPalette.warn,
                                     )
-                                  : TransferMarketService.computePlayerContract(player.name, widget.currentSeason));
+                                  : TransferMarketService.computePlayerContract(
+                                      player.name,
+                                      widget.currentSeason,
+                                      overall: player.overall,
+                                      age: player.age,
+                                    ));
 
                           final baseValuation = calculatePlayerValuation(player);
                           final fee = TransferMarketService.calculateEffectiveTransferFee(
@@ -1021,4 +1250,62 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
       ),
     );
   }
+
+  Widget _buildRatingChip(String code, String label) {
+    final isSelected = _selectedRatingTier == code;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    return InkWell(
+      onTap: () {
+        setState(() => _selectedRatingTier = code);
+        _loadPlayers();
+      },
+      borderRadius: BorderRadius.circular(6),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? AppPalette.cyan.withValues(alpha: 0.22)
+              : (isDark ? AppPalette.darkSurfaceRaised : AppPalette.lightSurfaceRaised),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(
+            color: isSelected ? AppPalette.cyan : Theme.of(context).dividerColor,
+            width: isSelected ? 1.4 : 1,
+          ),
+        ),
+        alignment: Alignment.center,
+        child: Text(
+          label,
+          style: TextStyle(
+            fontFamily: AppTypography.bodyFamily,
+            fontSize: 10,
+            fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+            color: isSelected
+                ? AppPalette.cyan
+                : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.85),
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _getSortLabel(String sortKey) {
+    switch (sortKey) {
+      case 'OVR_DESC':
+        return 'Rating (High-Low)';
+      case 'OVR_ASC':
+        return 'Rating (Low-High)';
+      case 'VAL_DESC':
+        return 'Value (High-Low)';
+      case 'VAL_ASC':
+        return 'Value (Low-High)';
+      case 'AGE_ASC':
+        return 'Youngest';
+      case 'NAME_ASC':
+        return 'Name (A-Z)';
+      default:
+        return 'Sort';
+    }
+  }
 }
+

@@ -69,20 +69,114 @@ class SquadContractTickResult {
 /// Service managing Transfer Market expansion, contract season counters, Free Agents, and Youth Prospects (Fix 30 / User Fix 8)
 class TransferMarketService {
   /// Computes deterministic contract duration for players in the transfer market pool.
-  /// Generates authentic distribution: ~18% Free Agents, ~25% Expiring (1 yr), ~57% multi-year contracts.
-  static ContractStatus computePlayerContract(String playerName, int currentSeason) {
-    final hash = (playerName.hashCode.abs() + currentSeason * 31) % 100;
-    if (hash < 18) {
-      return ContractStatus.fromSeasons(0); // Free Agent
-    } else if (hash < 43) {
-      return ContractStatus.fromSeasons(1); // 1 Year Expiring Contract (50% discount)
-    } else if (hash < 70) {
-      return ContractStatus.fromSeasons(2); // 2 Years Contract
-    } else if (hash < 88) {
-      return ContractStatus.fromSeasons(3); // 3 Years Contract
+  /// Enforces realistic football dynamics (Fix 36):
+  /// - High-rated superstars (85+ OVR) are virtually never free agents in season 1.
+  /// - As seasons advance, players with expiring contracts may sign a new contract or walk away as free agents.
+  /// - Free agents have realistic distributions across tiers and may be picked up by clubs.
+  static ContractStatus computePlayerContract(
+    String playerName,
+    int currentSeason, {
+    int? overall,
+    double? age,
+  }) {
+    final normName = playerName.trim().toLowerCase();
+    final baseSeed = (normName.hashCode.abs() ^ 0x3C6EF35F);
+    final roll = baseSeed % 100;
+    final ovr = overall ?? 78;
+    final pAge = age ?? 26.0;
+
+    // 1. Initial contract duration in Season 1 based on player rating tier and age
+    int remaining;
+    if (ovr >= 87) {
+      if (pAge >= 35 && roll == 99) {
+        remaining = 0; // Extremely rare veteran free agent
+      } else if (roll < 6) {
+        remaining = 1; // 1 Year Expiring Contract (6%)
+      } else if (roll < 31) {
+        remaining = 2; // 2 Years Contract (25%)
+      } else if (roll < 76) {
+        remaining = 3; // 3 Years Contract (45%)
+      } else {
+        remaining = 4; // 4+ Years Contract (24%)
+      }
+    } else if (ovr >= 83) {
+      if (pAge >= 33 && roll < 2) {
+        remaining = 0; // Rare veteran free agent (2%)
+      } else if (roll < 10) {
+        remaining = 1; // 1 Year Expiring (8-10%)
+      } else if (roll < 42) {
+        remaining = 2; // 2 Years (32%)
+      } else if (roll < 82) {
+        remaining = 3; // 3 Years (40%)
+      } else {
+        remaining = 4; // 4+ Years (18%)
+      }
+    } else if (ovr >= 79) {
+      if (roll < 4) {
+        remaining = 0; // Free agent (4%)
+      } else if (roll < 16) {
+        remaining = 1; // 1 Year Expiring (12%)
+      } else if (roll < 53) {
+        remaining = 2; // 2 Years (37%)
+      } else if (roll < 88) {
+        remaining = 3; // 3 Years (35%)
+      } else {
+        remaining = 4; // 4+ Years (12%)
+      }
+    } else if (ovr >= 74) {
+      if (roll < 7) {
+        remaining = 0; // Free agent (7%)
+      } else if (roll < 24) {
+        remaining = 1; // 1 Year Expiring (17%)
+      } else if (roll < 65) {
+        remaining = 2; // 2 Years (41%)
+      } else {
+        remaining = 3; // 3 Years (35%)
+      }
     } else {
-      return ContractStatus.fromSeasons(4); // 4-5 Years Long Term Contract
+      // Lower tier (< 74 OVR)
+      if (roll < 12) {
+        remaining = 0; // Free agent (12%)
+      } else if (roll < 32) {
+        remaining = 1; // 1 Year Expiring (20%)
+      } else if (roll < 79) {
+        remaining = 2; // 2 Years (47%)
+      } else {
+        remaining = 3; // 3 Years (21%)
+      }
     }
+
+    // 2. Simulate season-by-season progression ("Those with contracts expiring may sign a new contract or may not")
+    for (int s = 2; s <= currentSeason; s++) {
+      if (remaining == 0) {
+        // Player was a Free Agent: May be signed by a club or remain unattached
+        final pickupSeed = (baseSeed + s * 4397) % 100;
+        final pPickup = ovr >= 85 ? 85 : (ovr >= 80 ? 70 : (ovr >= 74 ? 50 : 35));
+        if (pickupSeed < pPickup) {
+          remaining = ovr >= 80 ? 2 : 1; // Signed a 1-2 year deal
+        }
+      } else {
+        // 1 season elapses
+        remaining -= 1;
+        if (remaining == 0) {
+          // Contract expired! Player may sign a renewal or walk away as a free agent
+          final renewSeed = (baseSeed + s * 7919) % 100;
+          int pRenew = ovr >= 87 ? 90 : (ovr >= 83 ? 80 : (ovr >= 75 ? 65 : 50));
+          if (pAge + s >= 33) {
+            pRenew -= 15; // Veterans slightly less likely to renew long-term
+          }
+          if (renewSeed < pRenew) {
+            // Signed contract renewal!
+            remaining = ovr >= 83 ? 3 : 2;
+          } else {
+            // Did not sign a new contract -> Free Agent
+            remaining = 0;
+          }
+        }
+      }
+    }
+
+    return ContractStatus.fromSeasons(remaining);
   }
 
   /// Calculates the effective transfer fee considering free agency (£0) or expiring contract (50% discount).

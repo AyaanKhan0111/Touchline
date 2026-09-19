@@ -977,7 +977,12 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       _playerContracts[entry.key.toString()] = (entry.value as num).toInt();
     }
     for (final p in _userSquad) {
-      _playerContracts[p.name] ??= TransferMarketService.computePlayerContract(p.name, _currentSeason).seasonsRemaining.clamp(2, 5);
+      _playerContracts[p.name] ??= TransferMarketService.computePlayerContract(
+        p.name,
+        _currentSeason,
+        overall: p.overall,
+        age: p.age,
+      ).seasonsRemaining.clamp(2, 5);
     }
 
     // Restore saved AI club squads (Fix 34 / Issue: Global Player Exclusivity)
@@ -1552,7 +1557,12 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     _activeSquadEvents.clear();
     _playerContracts.clear();
     for (final p in _userSquad) {
-      _playerContracts[p.name] = TransferMarketService.computePlayerContract(p.name, _currentSeason).seasonsRemaining.clamp(2, 5);
+      _playerContracts[p.name] = TransferMarketService.computePlayerContract(
+        p.name,
+        _currentSeason,
+        overall: p.overall,
+        age: p.age,
+      ).seasonsRemaining.clamp(2, 5);
     }
     _playerAppearances.clear();
     _playerGoals.clear();
