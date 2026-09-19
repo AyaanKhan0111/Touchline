@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_palette.dart';
 import '../../domain/services/sim_engine.dart';
 import '../shared/widgets/club_badge.dart';
+import '../shared/widgets/stat_badge.dart';
 
 String _getClubCode(String name) {
   final clean = name.trim();
@@ -620,7 +621,8 @@ class MatchDetailSheet extends StatelessWidget {
                   ],
                 ),
                 const Divider(height: 12),
-                ...match.homePlayerRatings.entries.map((e) => _buildRatingItem(e.key, e.value, isDark)),
+                ...match.homePlayerRatings.entries.map((e) =>
+                    _buildRatingItem(e.key, e.value, match.homePlayerPositions[e.key], isDark)),
               ],
             ),
           ),
@@ -645,7 +647,8 @@ class MatchDetailSheet extends StatelessWidget {
                   ],
                 ),
                 const Divider(height: 12),
-                ...match.awayPlayerRatings.entries.map((e) => _buildRatingItem(e.key, e.value, isDark)),
+                ...match.awayPlayerRatings.entries.map((e) =>
+                    _buildRatingItem(e.key, e.value, match.awayPlayerPositions[e.key], isDark)),
               ],
             ),
           ),
@@ -654,11 +657,15 @@ class MatchDetailSheet extends StatelessWidget {
     );
   }
 
-  Widget _buildRatingItem(String name, double rating, bool isDark) {
+  Widget _buildRatingItem(String name, double rating, String? position, bool isDark) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 2.5),
       child: Row(
         children: [
+          if (position != null && position.isNotEmpty) ...[
+            PositionBadge(position: position, isSmall: true),
+            const SizedBox(width: 5),
+          ],
           Expanded(
             child: Text(
               name,

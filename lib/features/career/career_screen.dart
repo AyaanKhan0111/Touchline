@@ -1135,6 +1135,21 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       if (sanitized.length >= 15 && (!_aiClubPlayers.containsKey(club) || _aiClubPlayers[club]!.isEmpty)) {
         _aiClubPlayers[club] = await _loadSimPlayersForNames(db, sanitized, club);
       }
+
+      // Verify positional balance of existing cached squad (Fix 37)
+      final existingPlayers = _aiClubPlayers[club] ?? [];
+      final defCount = existingPlayers.where((p) => SimEngine.isDefender(p.position)).length;
+      final midCount = existingPlayers.where((p) => SimEngine.isMidfielder(p.position)).length;
+      final fwdCount = existingPlayers.where((p) => SimEngine.isForward(p.position)).length;
+      final isUnbalanced = defCount < 3 || midCount < 3 || fwdCount > 6;
+      if (isUnbalanced) {
+        // Discard corrupt/unbalanced legacy squad so it will be regenerated with balanced modern positions in Step 3!
+        for (final n in sanitized) {
+          claimedPlayerNames.remove(n.trim().toLowerCase());
+        }
+        _aiClubSquads.remove(club);
+        _aiClubPlayers.remove(club);
+      }
     }
 
     // Step 3: Populate any unpopulated club or clubs with fewer than 15 players
@@ -1147,76 +1162,120 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       }
 
       final queryClub = club == 'Inter Milan' ? 'Inter' : (club == 'Paris Saint-Germain' ? 'Paris' : club);
-      final rows = await db.rawQuery('''
-        SELECT player_name, primary_position, overall
-        FROM players
-        WHERE team_name LIKE ?
-        ORDER BY overall DESC, season DESC
-      ''', ['%$queryClub%']);
 
-      final distinctRows = <Map<String, dynamic>>[];
-      final clubSquadNames = List<String>.from(_aiClubSquads[club] ?? []);
+      // Determine latest era for this club in database (Fix 37: modern era priority over historical clutter)
+      final seasonResult = await db.rawQuery(
+        'SELECT MAX(season) as max_s FROM players WHERE team_name LIKE ?',
+        ['%$queryClub%'],
+      );
+      final int maxSeason = (seasonResult.first['max_s'] as num?)?.toInt() ?? 2026;
+      final int minSeason = maxSeason - 3; // Modern era window
 
-      for (final r in rows) {
-        final name = (r['player_name'] as String).trim().toLowerCase();
-        // Skip if claimed by User Club or already claimed by another AI club
-        if (!claimedPlayerNames.contains(name)) {
-          claimedPlayerNames.add(name);
-          distinctRows.add(r);
-          clubSquadNames.add(r['player_name'] as String);
-          if (clubSquadNames.length >= 22) break;
-        }
-      }
+      Future<List<SimPlayer>> pickClubLine(String positionClause, int targetCount) async {
+        final line = <SimPlayer>[];
 
-      if (distinctRows.isNotEmpty || clubSquadNames.isNotEmpty) {
-        final rawSimPlayers = distinctRows.map((r) => SimPlayer(
-          name: r['player_name'] as String,
-          position: r['primary_position'] as String? ?? 'CM',
-          overall: (r['overall'] as num?)?.toInt() ?? 78,
-          isStarter: false,
-        )).toList();
+        // Pass 1: Target modern era players
+        var rows = await db.rawQuery('''
+          WITH ranked AS (
+            SELECT player_name, primary_position, overall, season,
+                   ROW_NUMBER() OVER (PARTITION BY player_name ORDER BY season DESC, overall DESC) as rn
+            FROM players
+            WHERE team_name LIKE ? AND season >= ? AND ($positionClause)
+          )
+          SELECT player_name, primary_position, overall
+          FROM ranked
+          WHERE rn = 1
+          ORDER BY overall DESC
+        ''', ['%$queryClub%', minSeason]);
 
-        if (_aiClubPlayers.containsKey(club) && _aiClubPlayers[club]!.isNotEmpty) {
-          rawSimPlayers.insertAll(0, _aiClubPlayers[club]!);
-        }
-
-        if (rawSimPlayers.length < 15) {
-          final needed = 15 - rawSimPlayers.length;
-          for (int i = 1; i <= needed; i++) {
-            rawSimPlayers.add(SimPlayer(
-              name: '$club Academy #$i',
-              position: i == 1 && !rawSimPlayers.any((p) => p.position == 'GK') ? 'GK' : 'CM',
-              overall: 74,
+        for (final r in rows) {
+          final pName = r['player_name'] as String;
+          final norm = pName.trim().toLowerCase();
+          if (!claimedPlayerNames.contains(norm)) {
+            claimedPlayerNames.add(norm);
+            line.add(SimPlayer(
+              name: pName,
+              position: r['primary_position'] as String? ?? 'CM',
+              overall: (r['overall'] as num?)?.toInt() ?? 78,
               isStarter: false,
             ));
+            if (line.length == targetCount) return line;
           }
         }
 
-        final tacticalAiSquad = SimEngine.normalizeSquadRoles(rawSimPlayers);
-        _aiClubSquads[club] = tacticalAiSquad.map((p) => p.name).toList();
-        _aiClubPlayers[club] = tacticalAiSquad;
-      } else {
-        final fallback = [
-          SimPlayer(name: '$club Goalkeeper', position: 'GK', overall: 81, isStarter: true),
-          SimPlayer(name: '$club Left Back', position: 'LB', overall: 78, isStarter: true),
-          SimPlayer(name: '$club Center Back 1', position: 'CB', overall: 80, isStarter: true),
-          SimPlayer(name: '$club Center Back 2', position: 'CB', overall: 79, isStarter: true),
-          SimPlayer(name: '$club Right Back', position: 'RB', overall: 78, isStarter: true),
-          SimPlayer(name: '$club Holding Mid', position: 'CDM', overall: 78, isStarter: true),
-          SimPlayer(name: '$club Central Mid', position: 'CM', overall: 79, isStarter: true),
-          SimPlayer(name: '$club Playmaker', position: 'CAM', overall: 80, isStarter: true),
-          SimPlayer(name: '$club Left Wing', position: 'LW', overall: 80, isStarter: true),
-          SimPlayer(name: '$club Right Wing', position: 'RW', overall: 80, isStarter: true),
-          SimPlayer(name: '$club Striker', position: 'ST', overall: 81, isStarter: true),
-          // Bench
-          SimPlayer(name: '$club Sub GK', position: 'GK', overall: 74, isStarter: false),
-          SimPlayer(name: '$club Sub DEF', position: 'CB', overall: 75, isStarter: false),
-          SimPlayer(name: '$club Sub MID', position: 'CM', overall: 75, isStarter: false),
-          SimPlayer(name: '$club Sub FWD', position: 'ST', overall: 76, isStarter: false),
-        ];
-        _aiClubSquads[club] = fallback.map((p) => p.name).toList();
-        _aiClubPlayers[club] = fallback;
+        // Pass 2: Fall back to all club records for this specific position if needed
+        if (line.length < targetCount) {
+          rows = await db.rawQuery('''
+            WITH ranked AS (
+              SELECT player_name, primary_position, overall, season,
+                     ROW_NUMBER() OVER (PARTITION BY player_name ORDER BY season DESC, overall DESC) as rn
+              FROM players
+              WHERE team_name LIKE ? AND ($positionClause)
+            )
+            SELECT player_name, primary_position, overall
+            FROM ranked
+            WHERE rn = 1
+            ORDER BY overall DESC
+          ''', ['%$queryClub%']);
+
+          for (final r in rows) {
+            final pName = r['player_name'] as String;
+            final norm = pName.trim().toLowerCase();
+            if (!claimedPlayerNames.contains(norm)) {
+              claimedPlayerNames.add(norm);
+              line.add(SimPlayer(
+                name: pName,
+                position: r['primary_position'] as String? ?? 'CM',
+                overall: (r['overall'] as num?)?.toInt() ?? 78,
+                isStarter: false,
+              ));
+              if (line.length == targetCount) return line;
+            }
+          }
+        }
+
+        return line;
       }
+
+      // 1. Pick 2 Goalkeepers
+      final gks = await pickClubLine("primary_position = 'GK'", 2);
+
+      // 2. Pick 6-7 Defenders with full-back and centre-back distribution
+      final lbs = await pickClubLine("primary_position IN ('LB', 'LWB')", 2);
+      final rbs = await pickClubLine("primary_position IN ('RB', 'RWB')", 2);
+      final cbs = await pickClubLine("primary_position IN ('CB', 'LCB', 'RCB')", 3);
+      final defs = [...lbs, ...cbs, ...rbs];
+      if (defs.length < 6) {
+        final extraDefs = await pickClubLine("primary_position IN ('CB', 'LB', 'RB', 'LWB', 'RWB')", 6 - defs.length);
+        defs.addAll(extraDefs);
+      }
+
+      // 3. Pick 6 Midfielders (balanced holding, central, attacking)
+      final mids = await pickClubLine("primary_position IN ('CM', 'CAM', 'CDM', 'LM', 'RM', 'LCM', 'RCM', 'LDM', 'RDM', 'AM')", 6);
+
+      // 4. Pick 4-5 Forwards / Attackers (wingers and central strikers)
+      final fwds = await pickClubLine("primary_position IN ('ST', 'CF', 'LW', 'RW', 'RF', 'LF', 'SS')", 5);
+
+      final rawSimPlayers = <SimPlayer>[...gks, ...defs, ...mids, ...fwds];
+
+      if (rawSimPlayers.length < 16) {
+        final needed = 16 - rawSimPlayers.length;
+        for (int i = 1; i <= needed; i++) {
+          final isGkNeeded = !rawSimPlayers.any((p) => p.position == 'GK');
+          final isDefNeeded = rawSimPlayers.where((p) => SimEngine.isDefender(p.position)).length < 4;
+          final pos = isGkNeeded ? 'GK' : (isDefNeeded ? 'CB' : 'CM');
+          rawSimPlayers.add(SimPlayer(
+            name: '$club Academy #$i',
+            position: pos,
+            overall: 74,
+            isStarter: false,
+          ));
+        }
+      }
+
+      final tacticalAiSquad = SimEngine.normalizeSquadRoles(rawSimPlayers);
+      _aiClubSquads[club] = tacticalAiSquad.map((p) => p.name).toList();
+      _aiClubPlayers[club] = tacticalAiSquad;
     }
   }
 

@@ -145,6 +145,8 @@ class MatchResult {
   final List<SubstitutionEvent> awaySubstitutions;
   final Map<String, double> homePlayerRatings;
   final Map<String, double> awayPlayerRatings;
+  final Map<String, String> homePlayerPositions;
+  final Map<String, String> awayPlayerPositions;
   final TeamMatchStats homeStats;
   final TeamMatchStats awayStats;
   final String motm;
@@ -161,6 +163,8 @@ class MatchResult {
     this.awaySubstitutions = const [],
     this.homePlayerRatings = const {},
     this.awayPlayerRatings = const {},
+    this.homePlayerPositions = const {},
+    this.awayPlayerPositions = const {},
     this.homeStats = const TeamMatchStats(),
     this.awayStats = const TeamMatchStats(),
     this.motm = '',
@@ -191,6 +195,8 @@ class MatchResult {
     'awaySubs': awaySubstitutions.map((e) => e.toMap()).toList(),
     'homeRatings': homePlayerRatings,
     'awayRatings': awayPlayerRatings,
+    'homePositions': homePlayerPositions,
+    'awayPositions': awayPlayerPositions,
     'homeStats': homeStats.toMap(),
     'awayStats': awayStats.toMap(),
     'motm': motm,
@@ -201,6 +207,13 @@ class MatchResult {
     Map<String, double> parseRatings(dynamic r) {
       if (r is Map) {
         return r.map((k, v) => MapEntry(k.toString(), (v as num).toDouble()));
+      }
+      return {};
+    }
+
+    Map<String, String> parsePositions(dynamic r) {
+      if (r is Map) {
+        return r.map((k, v) => MapEntry(k.toString(), v.toString()));
       }
       return {};
     }
@@ -228,6 +241,8 @@ class MatchResult {
           [],
       homePlayerRatings: parseRatings(map['homeRatings']),
       awayPlayerRatings: parseRatings(map['awayRatings']),
+      homePlayerPositions: parsePositions(map['homePositions']),
+      awayPlayerPositions: parsePositions(map['awayPositions']),
       homeStats: TeamMatchStats.fromMap(map['homeStats'] as Map<String, dynamic>?),
       awayStats: TeamMatchStats.fromMap(map['awayStats'] as Map<String, dynamic>?),
       motm: map['motm'] as String? ?? '',
@@ -405,6 +420,15 @@ class SimEngine {
 
     final attendance = 25000 + _rng.nextInt(45000);
 
+    final homePositions = <String, String>{};
+    for (final p in homeResolved) {
+      homePositions[p.name] = p.position;
+    }
+    final awayPositions = <String, String>{};
+    for (final p in awayResolved) {
+      awayPositions[p.name] = p.position;
+    }
+
     return MatchResult(
       homeClub: homeClub,
       awayClub: awayClub,
@@ -416,6 +440,8 @@ class SimEngine {
       awaySubstitutions: awaySubs,
       homePlayerRatings: homeRatings,
       awayPlayerRatings: awayRatings,
+      homePlayerPositions: homePositions,
+      awayPlayerPositions: awayPositions,
       homeStats: homeStats,
       awayStats: awayStats,
       motm: bestPlayer,
@@ -429,44 +455,243 @@ class SimEngine {
     return p == 'GK' || p.contains('GOAL');
   }
 
-  /// Normalizes a squad so exactly 1 Goalkeeper starts in goal, 10 outfielders start,
-  /// and any backup Goalkeeper is placed on the bench as reserve GK.
+  /// Checks whether a position string represents a Defender
+  static bool isDefender(String pos) {
+    final p = pos.toUpperCase().trim();
+    return const {'CB', 'LB', 'RB', 'LWB', 'RWB', 'LCB', 'RCB', 'DEF', 'SW'}.contains(p);
+  }
+
+  /// Checks whether a position string represents a Midfielder
+  static bool isMidfielder(String pos) {
+    final p = pos.toUpperCase().trim();
+    return const {'CM', 'CAM', 'CDM', 'LM', 'RM', 'LCM', 'RCM', 'LDM', 'RDM', 'AM', 'MID'}.contains(p);
+  }
+
+  /// Checks whether a position string represents a Forward / Attacker
+  static bool isForward(String pos) {
+    final p = pos.toUpperCase().trim();
+    return const {'ST', 'CF', 'LW', 'RW', 'RF', 'LF', 'SS', 'FWD', 'ATT'}.contains(p);
+  }
+
+  /// Normalizes a squad into a balanced, authentic 4-3-3 tactical lineup (Fix 37):
+  /// - 1 Goalkeeper (GK)
+  /// - 4 Defenders (LB, CB, CB, RB)
+  /// - 3 Midfielders (CDM, CM, CAM or balanced midfield)
+  /// - 3 Attackers (LW, ST, RW)
+  /// - Balanced Bench (1 Backup GK, 2 DEF, 2 MID, 2 FWD, + remaining reserves)
   static List<SimPlayer> normalizeSquadRoles(List<SimPlayer> squad) {
     if (squad.isEmpty) return squad;
 
+    // Check if squad is already explicitly designated with starters and a starting GK
+    // (e.g. from user manager's tactical formation pick or custom test configuration)
+    final existingStarters = squad.where((p) => p.isStarter).toList();
+    if (existingStarters.isNotEmpty &&
+        existingStarters.where((p) => isGoalkeeper(p.position)).length == 1 &&
+        (existingStarters.length == 11 || (squad.length <= 11 && existingStarters.length >= 8))) {
+      final bench = squad.where((p) => !p.isStarter).toList();
+      return [...existingStarters, ...bench];
+    }
+
     final gks = squad.where((p) => isGoalkeeper(p.position)).toList()
       ..sort((a, b) => b.overall.compareTo(a.overall));
-    final outfield = squad.where((p) => !isGoalkeeper(p.position)).toList()
+
+    final defs = squad.where((p) => !isGoalkeeper(p.position) && isDefender(p.position)).toList()
       ..sort((a, b) => b.overall.compareTo(a.overall));
 
-    // Starter GK: highest rated GK, or fallback
+    final mids = squad.where((p) => !isGoalkeeper(p.position) && isMidfielder(p.position)).toList()
+      ..sort((a, b) => b.overall.compareTo(a.overall));
+
+    final fwds = squad.where((p) => !isGoalkeeper(p.position) && isForward(p.position)).toList()
+      ..sort((a, b) => b.overall.compareTo(a.overall));
+
+    final otherOutfield = squad.where((p) => !isGoalkeeper(p.position) &&
+        !defs.contains(p) && !mids.contains(p) && !fwds.contains(p)).toList()
+      ..sort((a, b) => b.overall.compareTo(a.overall));
+
+    final availableDefs = List<SimPlayer>.from(defs);
+    final availableMids = List<SimPlayer>.from(mids);
+    final availableFwds = List<SimPlayer>.from(fwds);
+    final outfield = squad.where((p) => !isGoalkeeper(p.position)).toList();
+
+    // Helper to get fallback player from available pools or squad (strictly outfield only)
+    SimPlayer getFallbackPlayer(String role) {
+      if (otherOutfield.isNotEmpty) return otherOutfield.removeAt(0);
+      if (availableDefs.isNotEmpty) return availableDefs.removeAt(0);
+      if (availableMids.isNotEmpty) return availableMids.removeAt(0);
+      if (availableFwds.isNotEmpty) return availableFwds.removeAt(0);
+      if (outfield.isNotEmpty) {
+        final reuse = outfield[role.hashCode.abs() % outfield.length];
+        return SimPlayer(name: reuse.name, position: role, overall: reuse.overall, isStarter: true);
+      }
+      return SimPlayer(name: 'Starting Player', position: role, overall: 78, isStarter: true);
+    }
+
+    // 1. Starter GK
     final starterGk = gks.isNotEmpty
         ? SimPlayer(name: gks[0].name, position: 'GK', overall: gks[0].overall, isStarter: true)
-        : const SimPlayer(name: 'Starting Goalkeeper', position: 'GK', overall: 80, isStarter: true);
+        : (squad.isNotEmpty
+            ? SimPlayer(name: squad.first.name, position: 'GK', overall: 80, isStarter: true)
+            : const SimPlayer(name: 'Starting Goalkeeper', position: 'GK', overall: 80, isStarter: true));
 
-    // Starter Outfield: top 10 outfielders
-    final starterOutfield = outfield.take(10).map((p) =>
-        SimPlayer(name: p.name, position: p.position, overall: p.overall, isStarter: true)).toList();
+    // 2. Starter 4 Defenders: LB, CB, CB, RB
+    SimPlayer? leftBack;
+    SimPlayer? rightBack;
 
-    // Bench GK: 2nd GK if present
+    final lbIdx = availableDefs.indexWhere((p) => const ['LB', 'LWB'].contains(p.position.toUpperCase()));
+    if (lbIdx != -1) leftBack = availableDefs.removeAt(lbIdx);
+
+    final rbIdx = availableDefs.indexWhere((p) => const ['RB', 'RWB'].contains(p.position.toUpperCase()));
+    if (rbIdx != -1) rightBack = availableDefs.removeAt(rbIdx);
+
+    var cb1 = availableDefs.isNotEmpty ? availableDefs.removeAt(0) : null;
+    var cb2 = availableDefs.isNotEmpty ? availableDefs.removeAt(0) : null;
+
+    leftBack ??= (availableDefs.isNotEmpty ? availableDefs.removeAt(0) : null);
+    rightBack ??= (availableDefs.isNotEmpty ? availableDefs.removeAt(0) : null);
+
+    // If squad was short on natural defenders, backfill from other outfielders or squad
+    leftBack ??= getFallbackPlayer('LB');
+    cb1 ??= getFallbackPlayer('CB');
+    cb2 ??= getFallbackPlayer('CB');
+    rightBack ??= getFallbackPlayer('RB');
+
+    final starterDefs = [
+      SimPlayer(
+        name: leftBack.name,
+        position: 'LB',
+        overall: leftBack.overall,
+        isStarter: true,
+      ),
+      SimPlayer(
+        name: cb1.name,
+        position: 'CB',
+        overall: cb1.overall,
+        isStarter: true,
+      ),
+      SimPlayer(
+        name: cb2.name,
+        position: 'CB',
+        overall: cb2.overall,
+        isStarter: true,
+      ),
+      SimPlayer(
+        name: rightBack.name,
+        position: 'RB',
+        overall: rightBack.overall,
+        isStarter: true,
+      ),
+    ];
+
+    // 3. Starter 3 Midfielders: CDM, CM, CAM (or CM, CM, CM)
+    SimPlayer? cdm;
+    SimPlayer? cam;
+    SimPlayer? cm;
+
+    final cdmIdx = availableMids.indexWhere((p) => const ['CDM', 'LDM', 'RDM'].contains(p.position.toUpperCase()));
+    if (cdmIdx != -1) cdm = availableMids.removeAt(cdmIdx);
+
+    final camIdx = availableMids.indexWhere((p) => const ['CAM', 'AM'].contains(p.position.toUpperCase()));
+    if (camIdx != -1) cam = availableMids.removeAt(camIdx);
+
+    cm ??= (availableMids.isNotEmpty ? availableMids.removeAt(0) : null);
+    cdm ??= (availableMids.isNotEmpty ? availableMids.removeAt(0) : null);
+    cam ??= (availableMids.isNotEmpty ? availableMids.removeAt(0) : null);
+
+    cdm ??= getFallbackPlayer('CDM');
+    cm ??= getFallbackPlayer('CM');
+    cam ??= getFallbackPlayer('CAM');
+
+    final starterMids = [
+      SimPlayer(
+        name: cdm.name,
+        position: cdm.position == 'CDM' ? 'CDM' : 'CM',
+        overall: cdm.overall,
+        isStarter: true,
+      ),
+      SimPlayer(
+        name: cm.name,
+        position: 'CM',
+        overall: cm.overall,
+        isStarter: true,
+      ),
+      SimPlayer(
+        name: cam.name,
+        position: cam.position == 'CAM' ? 'CAM' : 'CM',
+        overall: cam.overall,
+        isStarter: true,
+      ),
+    ];
+
+    // 4. Starter 3 Attackers: LW, ST, RW
+    SimPlayer? lw;
+    SimPlayer? rw;
+    SimPlayer? st;
+
+    final lwIdx = availableFwds.indexWhere((p) => const ['LW', 'LM', 'LF'].contains(p.position.toUpperCase()));
+    if (lwIdx != -1) lw = availableFwds.removeAt(lwIdx);
+
+    final rwIdx = availableFwds.indexWhere((p) => const ['RW', 'RM', 'RF'].contains(p.position.toUpperCase()));
+    if (rwIdx != -1) rw = availableFwds.removeAt(rwIdx);
+
+    final stIdx = availableFwds.indexWhere((p) => const ['ST', 'CF', 'SS'].contains(p.position.toUpperCase()));
+    if (stIdx != -1) st = availableFwds.removeAt(stIdx);
+
+    lw ??= (availableFwds.isNotEmpty ? availableFwds.removeAt(0) : null);
+    st ??= (availableFwds.isNotEmpty ? availableFwds.removeAt(0) : null);
+    rw ??= (availableFwds.isNotEmpty ? availableFwds.removeAt(0) : null);
+
+    lw ??= getFallbackPlayer('LW');
+    st ??= getFallbackPlayer('ST');
+    rw ??= getFallbackPlayer('RW');
+
+    final starterFwds = [
+      SimPlayer(
+        name: lw.name,
+        position: 'LW',
+        overall: lw.overall,
+        isStarter: true,
+      ),
+      SimPlayer(
+        name: st.name,
+        position: 'ST',
+        overall: st.overall,
+        isStarter: true,
+      ),
+      SimPlayer(
+        name: rw.name,
+        position: 'RW',
+        overall: rw.overall,
+        isStarter: true,
+      ),
+    ];
+
+    final starters = [
+      starterGk,
+      ...starterDefs,
+      ...starterMids,
+      ...starterFwds,
+    ];
+
+    // 5. Build Bench (Reserves)
     final benchGk = gks.length > 1
         ? [SimPlayer(name: gks[1].name, position: 'GK', overall: gks[1].overall, isStarter: false)]
         : <SimPlayer>[];
 
-    // Bench Outfield: remaining outfielders
-    final benchOutfield = outfield.skip(10).map((p) =>
-        SimPlayer(name: p.name, position: p.position, overall: p.overall, isStarter: false)).toList();
+    final remainingBench = [
+      ...availableDefs.map((p) => SimPlayer(name: p.name, position: p.position, overall: p.overall, isStarter: false)),
+      ...availableMids.map((p) => SimPlayer(name: p.name, position: p.position, overall: p.overall, isStarter: false)),
+      ...availableFwds.map((p) => SimPlayer(name: p.name, position: p.position, overall: p.overall, isStarter: false)),
+      ...otherOutfield.map((p) => SimPlayer(name: p.name, position: p.position, overall: p.overall, isStarter: false)),
+    ]..sort((a, b) => b.overall.compareTo(a.overall));
 
-    // Any remaining surplus GKs (rare 3rd GK)
     final extraGks = gks.length > 2
         ? gks.skip(2).map((p) => SimPlayer(name: p.name, position: 'GK', overall: p.overall, isStarter: false)).toList()
         : <SimPlayer>[];
 
     return [
-      starterGk,
-      ...starterOutfield,
+      ...starters,
       ...benchGk,
-      ...benchOutfield,
+      ...remainingBench,
       ...extraGks,
     ];
   }

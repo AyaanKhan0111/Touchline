@@ -4340,7 +4340,127 @@ void main() {
       expect(renewalCostYoung, inInclusiveRange(0.5, 12.0));
     });
   });
+
+  group('Fix 37: Balanced Club Lineups & 4-3-3 Positional Quotas', () {
+    test('SimEngine position classifiers accurately categorize player roles', () {
+      expect(SimEngine.isGoalkeeper('GK'), isTrue);
+      expect(SimEngine.isDefender('CB'), isTrue);
+      expect(SimEngine.isDefender('LB'), isTrue);
+      expect(SimEngine.isDefender('RB'), isTrue);
+      expect(SimEngine.isDefender('LWB'), isTrue);
+      expect(SimEngine.isDefender('RWB'), isTrue);
+
+      expect(SimEngine.isMidfielder('CM'), isTrue);
+      expect(SimEngine.isMidfielder('CDM'), isTrue);
+      expect(SimEngine.isMidfielder('CAM'), isTrue);
+      expect(SimEngine.isMidfielder('LM'), isTrue);
+      expect(SimEngine.isMidfielder('RM'), isTrue);
+
+      expect(SimEngine.isForward('ST'), isTrue);
+      expect(SimEngine.isForward('CF'), isTrue);
+      expect(SimEngine.isForward('LW'), isTrue);
+      expect(SimEngine.isForward('RW'), isTrue);
+
+      // Mutually exclusive cross-checks
+      expect(SimEngine.isDefender('ST'), isFalse);
+      expect(SimEngine.isForward('CB'), isFalse);
+      expect(SimEngine.isMidfielder('GK'), isFalse);
+    });
+
+    test('normalizeSquadRoles enforces strict 4-3-3: 1 GK, 4 DEF (LB, CB, CB, RB), 3 MID, 3 FWD even with excess 90+ attackers', () {
+      // Squad overloaded with high-rated attackers (e.g. Manchester United / Real Madrid issue described by user)
+      final rawSquad = [
+        const SimPlayer(name: 'David de Gea', position: 'GK', overall: 89, isStarter: false),
+        const SimPlayer(name: 'Tom Heaton', position: 'GK', overall: 75, isStarter: false),
+        // 90+ Super-rated attackers
+        const SimPlayer(name: 'Cristiano Ronaldo', position: 'ST', overall: 94, isStarter: false),
+        const SimPlayer(name: 'Wayne Rooney', position: 'CF', overall: 91, isStarter: false),
+        const SimPlayer(name: 'Zlatan Ibrahimovic', position: 'ST', overall: 90, isStarter: false),
+        const SimPlayer(name: 'Robin van Persie', position: 'ST', overall: 89, isStarter: false),
+        const SimPlayer(name: 'Ruud van Nistelrooy', position: 'ST', overall: 90, isStarter: false),
+        const SimPlayer(name: 'Eric Cantona', position: 'CF', overall: 90, isStarter: false),
+        const SimPlayer(name: 'Marcus Rashford', position: 'LW', overall: 85, isStarter: false),
+        const SimPlayer(name: 'Antony', position: 'RW', overall: 81, isStarter: false),
+        // Midfielders
+        const SimPlayer(name: 'Casemiro', position: 'CDM', overall: 88, isStarter: false),
+        const SimPlayer(name: 'Bruno Fernandes', position: 'CAM', overall: 88, isStarter: false),
+        const SimPlayer(name: 'Paul Scholes', position: 'CM', overall: 89, isStarter: false),
+        const SimPlayer(name: 'Christian Eriksen', position: 'CM', overall: 82, isStarter: false),
+        // Defenders
+        const SimPlayer(name: 'Rio Ferdinand', position: 'CB', overall: 88, isStarter: false),
+        const SimPlayer(name: 'Nemanja Vidic', position: 'CB', overall: 88, isStarter: false),
+        const SimPlayer(name: 'Luke Shaw', position: 'LB', overall: 82, isStarter: false),
+        const SimPlayer(name: 'Diogo Dalot', position: 'RB', overall: 81, isStarter: false),
+        const SimPlayer(name: 'Harry Maguire', position: 'CB', overall: 80, isStarter: false),
+      ];
+
+      final normalized = SimEngine.normalizeSquadRoles(rawSquad);
+
+      // Verify exactly 11 starters
+      final starters = normalized.where((p) => p.isStarter).toList();
+      expect(starters.length, equals(11));
+
+      // 1 GK in goal
+      expect(starters[0].position, equals('GK'));
+      expect(starters[0].name, equals('David de Gea'));
+
+      // 4 Defenders at indices 1..4 (LB, CB, CB, RB)
+      final starterDefs = starters.sublist(1, 5);
+      expect(starterDefs.length, equals(4));
+      expect(starterDefs.every((p) => SimEngine.isDefender(p.position)), isTrue,
+          reason: 'Indices 1..4 must all be defenders');
+      expect(starterDefs.map((p) => p.position).toList(), equals(['LB', 'CB', 'CB', 'RB']),
+          reason: 'Starters must have proper tactical positions: LB, CB, CB, RB');
+      expect(starterDefs.any((p) => p.name == 'Cristiano Ronaldo'), isFalse,
+          reason: 'Attackers cannot start in defense');
+
+      // 3 Midfielders at indices 5..7 (CDM, CM, CAM)
+      final starterMids = starters.sublist(5, 8);
+      expect(starterMids.length, equals(3));
+      expect(starterMids.every((p) => SimEngine.isMidfielder(p.position)), isTrue,
+          reason: 'Indices 5..7 must all be midfielders');
+
+      // 3 Attackers at indices 8..10 (LW, ST, RW)
+      final starterFwds = starters.sublist(8, 11);
+      expect(starterFwds.length, equals(3));
+      expect(starterFwds.every((p) => SimEngine.isForward(p.position)), isTrue,
+          reason: 'Indices 8..10 must all be forwards/attackers');
+      expect(starterFwds.map((p) => p.position).toList(), equals(['LW', 'ST', 'RW']),
+          reason: 'Attackers must cover wide and central attacking positions');
+
+      // Bench has the reserve GK and remaining outfielders
+      final bench = normalized.where((p) => !p.isStarter).toList();
+      expect(bench.any((p) => p.name == 'Tom Heaton' && p.position == 'GK'), isTrue,
+          reason: 'Backup GK must be placed on the bench');
+      expect(bench.any((p) => p.name == 'Wayne Rooney'), isTrue,
+          reason: 'Excess high-rated forwards must be placed on the bench as reserves rather than crowding the defense');
+    });
+
+    test('MatchResult serialization preserves home and away player positions', () {
+      final match = MatchResult(
+        homeClub: 'Real Madrid',
+        awayClub: 'Barcelona',
+        homeGoals: 2,
+        awayGoals: 1,
+        attendance: 80000,
+        homePlayerRatings: {'Courtois': 8.0, 'Vinicius': 8.5},
+        awayPlayerRatings: {'Ter Stegen': 7.0, 'Lewandowski': 7.5},
+        homePlayerPositions: {'Courtois': 'GK', 'Vinicius': 'LW'},
+        awayPlayerPositions: {'Ter Stegen': 'GK', 'Lewandowski': 'ST'},
+      );
+
+      final map = match.toMap();
+      expect(map['homePositions'], equals({'Courtois': 'GK', 'Vinicius': 'LW'}));
+      expect(map['awayPositions'], equals({'Ter Stegen': 'GK', 'Lewandowski': 'ST'}));
+
+      final restored = MatchResult.fromMap(map);
+      expect(restored.homePlayerPositions['Courtois'], equals('GK'));
+      expect(restored.homePlayerPositions['Vinicius'], equals('LW'));
+      expect(restored.awayPlayerPositions['Lewandowski'], equals('ST'));
+    });
+  });
 }
+
 
 
 
