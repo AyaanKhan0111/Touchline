@@ -285,6 +285,44 @@ class ScheduledFixture {
   }
 }
 
+/// Unified representation of an upcoming fixture across any competition
+/// (Domestic League, UEFA Champions League, FA Cup, Carabao Cup).
+class CareerUpcomingMatch {
+  final String competitionId; // 'league', 'ucl', 'fa_cup', 'carabao_cup'
+  final String competitionName; // e.g. 'PREMIER LEAGUE', 'UEFA CHAMPIONS LEAGUE'
+  final String competitionShortName; // 'LEAGUE', 'UCL', 'FA CUP', 'CARABAO'
+  final Color competitionColor;
+  final IconData competitionIcon;
+  final String stageTitle; // e.g. 'GW 5 OF 38', 'Group Stage • MD 2', 'Quarter-Finals'
+  final int leagueGameweek; // The gameweek when this fixture is played/simulated
+  final String homeClub;
+  final String awayClub;
+  final String homeCode;
+  final String awayCode;
+  final bool isUserHome;
+  final String opponentClub;
+  final String opponentCode;
+  final String? aggregateScore;
+
+  const CareerUpcomingMatch({
+    required this.competitionId,
+    required this.competitionName,
+    required this.competitionShortName,
+    required this.competitionColor,
+    required this.competitionIcon,
+    required this.stageTitle,
+    required this.leagueGameweek,
+    required this.homeClub,
+    required this.awayClub,
+    required this.homeCode,
+    required this.awayCode,
+    required this.isUserHome,
+    required this.opponentClub,
+    required this.opponentCode,
+    this.aggregateScore,
+  });
+}
+
 List<List<ScheduledFixture>> generateSeasonSchedule(List<String> clubs, {int totalGameweeks = 38}) {
   if (clubs.length < 2) return [];
   final n = clubs.length;
@@ -603,6 +641,9 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
   // Career Hub Tab Navigation (Fix 38)
   int _careerTabIndex = 0; // 0: Matches Hub, 1: Squad, 2: Transfers, 3: Tables, 4: Results
   late final PageController _careerPageController;
+
+  // Next Fixture Filter (0: This Matchday, 1: All Upcoming, 2: League, 3: UCL, 4: FA Cup, 5: Carabao Cup)
+  int _nextFixtureFilterIndex = 0;
 
   void _jumpToTab(int index) {
     if (index < 0 || index > 4) return;
@@ -7173,15 +7214,460 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     );
   }
 
-  ScheduledFixture? get _nextUserFixture {
-    if (_currentGameweek > _totalGameweeks || _seasonSchedule.isEmpty) return null;
-    final roundFixtures = _seasonSchedule[_currentGameweek - 1];
-    for (final f in roundFixtures) {
-      if (f.homeClub == _userClub || f.awayClub == _userClub) {
-        return f;
+  String _lookupClubCode(String club, LeagueDefinition activeLeague) {
+    if (club == _userClub) return _userClubCode;
+    final code = activeLeague.clubCodes[club];
+    if (code != null) return code;
+    for (final l in kAvailableLeagues) {
+      if (l.clubCodes.containsKey(club)) return l.clubCodes[club]!;
+    }
+    return club.substring(0, min(3, club.length)).toUpperCase();
+  }
+
+  int _getLeagueGwForUclMatchday(int md, {required int totalGameweeks}) {
+    if (totalGameweeks == 18) {
+      const map = {1: 2, 2: 4, 3: 6, 4: 8, 5: 10, 6: 12, 7: 14, 8: 15, 9: 16, 10: 17, 11: 18};
+      return map[md] ?? 18;
+    }
+    const map = {1: 3, 2: 6, 3: 9, 4: 12, 5: 15, 6: 18, 7: 22, 8: 25, 9: 28, 10: 31, 11: 35};
+    return map[md] ?? 38;
+  }
+
+  List<CareerUpcomingMatch> _getUpcomingMatchesForMatchday(LeagueDefinition activeLeague) {
+    if (_currentGameweek > _totalGameweeks && _seasonSchedule.isEmpty) return [];
+    final matches = <CareerUpcomingMatch>[];
+
+    // 1. Domestic League Fixture
+    if (_currentGameweek <= _totalGameweeks && _seasonSchedule.length >= _currentGameweek) {
+      final roundFixtures = _seasonSchedule[_currentGameweek - 1];
+      final lFix = roundFixtures.where((f) => f.homeClub == _userClub || f.awayClub == _userClub).firstOrNull;
+      if (lFix != null) {
+        final isHome = lFix.homeClub == _userClub;
+        final homeCode = _lookupClubCode(lFix.homeClub, activeLeague);
+        final awayCode = _lookupClubCode(lFix.awayClub, activeLeague);
+        matches.add(CareerUpcomingMatch(
+          competitionId: 'league',
+          competitionName: activeLeague.name.toUpperCase(),
+          competitionShortName: 'LEAGUE',
+          competitionColor: AppPalette.gold,
+          competitionIcon: Icons.sports_soccer_rounded,
+          stageTitle: 'GW $_currentGameweek OF $_totalGameweeks',
+          leagueGameweek: _currentGameweek,
+          homeClub: lFix.homeClub,
+          awayClub: lFix.awayClub,
+          homeCode: homeCode,
+          awayCode: awayCode,
+          isUserHome: isHome,
+          opponentClub: isHome ? lFix.awayClub : lFix.homeClub,
+          opponentCode: isHome ? awayCode : homeCode,
+        ));
       }
     }
+
+    // 2. UEFA Champions League Fixture
+    final uclMd = UclTournament.getUclMatchdayForLeagueGw(_currentGameweek, totalGameweeks: _totalGameweeks);
+    if (uclMd != null && _uclTournament != null) {
+      _uclTournament!.checkAndAdvanceStages();
+      UclFixture? uFix;
+      String stageName = 'Group Stage • MD $uclMd';
+      String? aggScore;
+
+      if (uclMd <= 6) {
+        uFix = _uclTournament!.groupFixtures
+            .where((f) => f.matchday == uclMd && !f.isPlayed && (f.homeClub == _userClub || f.awayClub == _userClub))
+            .firstOrNull;
+      } else if (uclMd == 7) {
+        stageName = 'Quarter-Finals • Leg 1';
+        uFix = _uclTournament!.quarterFinals
+            .map((t) => t.leg1)
+            .where((f) => !f.isPlayed && (f.homeClub == _userClub || f.awayClub == _userClub))
+            .firstOrNull;
+      } else if (uclMd == 8) {
+        stageName = 'Quarter-Finals • Leg 2';
+        final tie = _uclTournament!.quarterFinals.where((t) => t.clubA == _userClub || t.clubB == _userClub).firstOrNull;
+        if (tie != null && tie.leg2 != null && !tie.leg2!.isPlayed) {
+          uFix = tie.leg2;
+          final res = tie.leg1.result;
+          if (res != null) {
+            aggScore = 'Agg: ${res.homeGoals}-${res.awayGoals}';
+          }
+        }
+      } else if (uclMd == 9) {
+        stageName = 'Semi-Finals • Leg 1';
+        uFix = _uclTournament!.semiFinals
+            .map((t) => t.leg1)
+            .where((f) => !f.isPlayed && (f.homeClub == _userClub || f.awayClub == _userClub))
+            .firstOrNull;
+      } else if (uclMd == 10) {
+        stageName = 'Semi-Finals • Leg 2';
+        final tie = _uclTournament!.semiFinals.where((t) => t.clubA == _userClub || t.clubB == _userClub).firstOrNull;
+        if (tie != null && tie.leg2 != null && !tie.leg2!.isPlayed) {
+          uFix = tie.leg2;
+          final res = tie.leg1.result;
+          if (res != null) {
+            aggScore = 'Agg: ${res.homeGoals}-${res.awayGoals}';
+          }
+        }
+      } else if (uclMd == 11) {
+        stageName = 'UCL Final';
+        final tie = _uclTournament!.finalTie;
+        if (tie != null && !tie.leg1.isPlayed && (tie.clubA == _userClub || tie.clubB == _userClub)) {
+          uFix = tie.leg1;
+        }
+      }
+
+      if (uFix != null) {
+        final isHome = uFix.homeClub == _userClub;
+        final homeCode = _lookupClubCode(uFix.homeClub, activeLeague);
+        final awayCode = _lookupClubCode(uFix.awayClub, activeLeague);
+        matches.add(CareerUpcomingMatch(
+          competitionId: 'ucl',
+          competitionName: 'UEFA CHAMPIONS LEAGUE',
+          competitionShortName: 'UCL',
+          competitionColor: const Color(0xFF4A90E2),
+          competitionIcon: Icons.stars_rounded,
+          stageTitle: stageName,
+          leagueGameweek: _currentGameweek,
+          homeClub: uFix.homeClub,
+          awayClub: uFix.awayClub,
+          homeCode: homeCode,
+          awayCode: awayCode,
+          isUserHome: isHome,
+          opponentClub: isHome ? uFix.awayClub : uFix.homeClub,
+          opponentCode: isHome ? awayCode : homeCode,
+          aggregateScore: aggScore,
+        ));
+      }
+    }
+
+    // 3. Carabao Cup Fixture
+    final carabaoRd = CupTournament.getCarabaoRoundForLeagueGw(_currentGameweek, totalGameweeks: _totalGameweeks);
+    if (carabaoRd != null && _carabaoCupTournament != null) {
+      final cFix = _carabaoCupTournament!.fixtures
+          .where((f) => f.roundIndex == carabaoRd && !f.isPlayed && (f.homeClub == _userClub || f.awayClub == _userClub))
+          .firstOrNull;
+      if (cFix != null) {
+        final isHome = cFix.homeClub == _userClub;
+        final homeCode = _lookupClubCode(cFix.homeClub, activeLeague);
+        final awayCode = _lookupClubCode(cFix.awayClub, activeLeague);
+        matches.add(CareerUpcomingMatch(
+          competitionId: 'carabao_cup',
+          competitionName: 'CARABAO CUP',
+          competitionShortName: 'CARABAO',
+          competitionColor: const Color(0xFF00C853),
+          competitionIcon: Icons.shield_rounded,
+          stageTitle: cFix.stage,
+          leagueGameweek: _currentGameweek,
+          homeClub: cFix.homeClub,
+          awayClub: cFix.awayClub,
+          homeCode: homeCode,
+          awayCode: awayCode,
+          isUserHome: isHome,
+          opponentClub: isHome ? cFix.awayClub : cFix.homeClub,
+          opponentCode: isHome ? awayCode : homeCode,
+        ));
+      }
+    }
+
+    // 4. FA Cup Fixture
+    final faRd = CupTournament.getFaCupRoundForLeagueGw(_currentGameweek, totalGameweeks: _totalGameweeks);
+    if (faRd != null && _faCupTournament != null) {
+      final fFix = _faCupTournament!.fixtures
+          .where((f) => f.roundIndex == faRd && !f.isPlayed && (f.homeClub == _userClub || f.awayClub == _userClub))
+          .firstOrNull;
+      if (fFix != null) {
+        final isHome = fFix.homeClub == _userClub;
+        final homeCode = _lookupClubCode(fFix.homeClub, activeLeague);
+        final awayCode = _lookupClubCode(fFix.awayClub, activeLeague);
+        matches.add(CareerUpcomingMatch(
+          competitionId: 'fa_cup',
+          competitionName: 'THE EMIRATES FA CUP',
+          competitionShortName: 'FA CUP',
+          competitionColor: const Color(0xFFE53935),
+          competitionIcon: Icons.emoji_events_rounded,
+          stageTitle: fFix.stage,
+          leagueGameweek: _currentGameweek,
+          homeClub: fFix.homeClub,
+          awayClub: fFix.awayClub,
+          homeCode: homeCode,
+          awayCode: awayCode,
+          isUserHome: isHome,
+          opponentClub: isHome ? fFix.awayClub : fFix.homeClub,
+          opponentCode: isHome ? awayCode : homeCode,
+        ));
+      }
+    }
+
+    return matches;
+  }
+
+  CareerUpcomingMatch? _getNextFixtureForCompetition(String compId, LeagueDefinition activeLeague) {
+    if (compId == 'league') {
+      if (_seasonSchedule.isEmpty) return null;
+      for (int gw = _currentGameweek; gw <= _totalGameweeks && gw <= _seasonSchedule.length; gw++) {
+        final roundFixtures = _seasonSchedule[gw - 1];
+        final lFix = roundFixtures.where((f) => f.homeClub == _userClub || f.awayClub == _userClub).firstOrNull;
+        if (lFix != null) {
+          final isHome = lFix.homeClub == _userClub;
+          final homeCode = _lookupClubCode(lFix.homeClub, activeLeague);
+          final awayCode = _lookupClubCode(lFix.awayClub, activeLeague);
+          return CareerUpcomingMatch(
+            competitionId: 'league',
+            competitionName: activeLeague.name.toUpperCase(),
+            competitionShortName: 'LEAGUE',
+            competitionColor: AppPalette.gold,
+            competitionIcon: Icons.sports_soccer_rounded,
+            stageTitle: 'GW $gw OF $_totalGameweeks',
+            leagueGameweek: gw,
+            homeClub: lFix.homeClub,
+            awayClub: lFix.awayClub,
+            homeCode: homeCode,
+            awayCode: awayCode,
+            isUserHome: isHome,
+            opponentClub: isHome ? lFix.awayClub : lFix.homeClub,
+            opponentCode: isHome ? awayCode : homeCode,
+          );
+        }
+      }
+      return null;
+    }
+
+    if (compId == 'ucl') {
+      if (_uclTournament == null) return null;
+      _uclTournament!.checkAndAdvanceStages();
+
+      // Group stage
+      for (final f in _uclTournament!.groupFixtures) {
+        if (!f.isPlayed && (f.homeClub == _userClub || f.awayClub == _userClub)) {
+          final lgw = _getLeagueGwForUclMatchday(f.matchday, totalGameweeks: _totalGameweeks);
+          if (lgw >= _currentGameweek) {
+            final isHome = f.homeClub == _userClub;
+            final homeCode = _lookupClubCode(f.homeClub, activeLeague);
+            final awayCode = _lookupClubCode(f.awayClub, activeLeague);
+            return CareerUpcomingMatch(
+              competitionId: 'ucl',
+              competitionName: 'UEFA CHAMPIONS LEAGUE',
+              competitionShortName: 'UCL',
+              competitionColor: const Color(0xFF4A90E2),
+              competitionIcon: Icons.stars_rounded,
+              stageTitle: 'Group Stage • MD ${f.matchday}',
+              leagueGameweek: lgw,
+              homeClub: f.homeClub,
+              awayClub: f.awayClub,
+              homeCode: homeCode,
+              awayCode: awayCode,
+              isUserHome: isHome,
+              opponentClub: isHome ? f.awayClub : f.homeClub,
+              opponentCode: isHome ? awayCode : homeCode,
+            );
+          }
+        }
+      }
+
+      // Quarter-Finals
+      for (final t in _uclTournament!.quarterFinals) {
+        if (t.clubA == _userClub || t.clubB == _userClub) {
+          if (!t.leg1.isPlayed) {
+            final lgw = _getLeagueGwForUclMatchday(7, totalGameweeks: _totalGameweeks);
+            if (lgw >= _currentGameweek) {
+              final f = t.leg1;
+              final isHome = f.homeClub == _userClub;
+              return CareerUpcomingMatch(
+                competitionId: 'ucl',
+                competitionName: 'UEFA CHAMPIONS LEAGUE',
+                competitionShortName: 'UCL',
+                competitionColor: const Color(0xFF4A90E2),
+                competitionIcon: Icons.stars_rounded,
+                stageTitle: 'Quarter-Finals • Leg 1',
+                leagueGameweek: lgw,
+                homeClub: f.homeClub,
+                awayClub: f.awayClub,
+                homeCode: _lookupClubCode(f.homeClub, activeLeague),
+                awayCode: _lookupClubCode(f.awayClub, activeLeague),
+                isUserHome: isHome,
+                opponentClub: isHome ? f.awayClub : f.homeClub,
+                opponentCode: isHome ? _lookupClubCode(f.awayClub, activeLeague) : _lookupClubCode(f.homeClub, activeLeague),
+              );
+            }
+          }
+          if (t.leg2 != null && !t.leg2!.isPlayed) {
+            final lgw = _getLeagueGwForUclMatchday(8, totalGameweeks: _totalGameweeks);
+            if (lgw >= _currentGameweek) {
+              final f = t.leg2!;
+              final isHome = f.homeClub == _userClub;
+              final res = t.leg1.result;
+              return CareerUpcomingMatch(
+                competitionId: 'ucl',
+                competitionName: 'UEFA CHAMPIONS LEAGUE',
+                competitionShortName: 'UCL',
+                competitionColor: const Color(0xFF4A90E2),
+                competitionIcon: Icons.stars_rounded,
+                stageTitle: 'Quarter-Finals • Leg 2',
+                leagueGameweek: lgw,
+                homeClub: f.homeClub,
+                awayClub: f.awayClub,
+                homeCode: _lookupClubCode(f.homeClub, activeLeague),
+                awayCode: _lookupClubCode(f.awayClub, activeLeague),
+                isUserHome: isHome,
+                opponentClub: isHome ? f.awayClub : f.homeClub,
+                opponentCode: isHome ? _lookupClubCode(f.awayClub, activeLeague) : _lookupClubCode(f.homeClub, activeLeague),
+                aggregateScore: res != null ? 'Agg: ${res.homeGoals}-${res.awayGoals}' : null,
+              );
+            }
+          }
+        }
+      }
+
+      // Semi-Finals
+      for (final t in _uclTournament!.semiFinals) {
+        if (t.clubA == _userClub || t.clubB == _userClub) {
+          if (!t.leg1.isPlayed) {
+            final lgw = _getLeagueGwForUclMatchday(9, totalGameweeks: _totalGameweeks);
+            if (lgw >= _currentGameweek) {
+              final f = t.leg1;
+              final isHome = f.homeClub == _userClub;
+              return CareerUpcomingMatch(
+                competitionId: 'ucl',
+                competitionName: 'UEFA CHAMPIONS LEAGUE',
+                competitionShortName: 'UCL',
+                competitionColor: const Color(0xFF4A90E2),
+                competitionIcon: Icons.stars_rounded,
+                stageTitle: 'Semi-Finals • Leg 1',
+                leagueGameweek: lgw,
+                homeClub: f.homeClub,
+                awayClub: f.awayClub,
+                homeCode: _lookupClubCode(f.homeClub, activeLeague),
+                awayCode: _lookupClubCode(f.awayClub, activeLeague),
+                isUserHome: isHome,
+                opponentClub: isHome ? f.awayClub : f.homeClub,
+                opponentCode: isHome ? _lookupClubCode(f.awayClub, activeLeague) : _lookupClubCode(f.homeClub, activeLeague),
+              );
+            }
+          }
+          if (t.leg2 != null && !t.leg2!.isPlayed) {
+            final lgw = _getLeagueGwForUclMatchday(10, totalGameweeks: _totalGameweeks);
+            if (lgw >= _currentGameweek) {
+              final f = t.leg2!;
+              final isHome = f.homeClub == _userClub;
+              final res = t.leg1.result;
+              return CareerUpcomingMatch(
+                competitionId: 'ucl',
+                competitionName: 'UEFA CHAMPIONS LEAGUE',
+                competitionShortName: 'UCL',
+                competitionColor: const Color(0xFF4A90E2),
+                competitionIcon: Icons.stars_rounded,
+                stageTitle: 'Semi-Finals • Leg 2',
+                leagueGameweek: lgw,
+                homeClub: f.homeClub,
+                awayClub: f.awayClub,
+                homeCode: _lookupClubCode(f.homeClub, activeLeague),
+                awayCode: _lookupClubCode(f.awayClub, activeLeague),
+                isUserHome: isHome,
+                opponentClub: isHome ? f.awayClub : f.homeClub,
+                opponentCode: isHome ? _lookupClubCode(f.awayClub, activeLeague) : _lookupClubCode(f.homeClub, activeLeague),
+                aggregateScore: res != null ? 'Agg: ${res.homeGoals}-${res.awayGoals}' : null,
+              );
+            }
+          }
+        }
+      }
+
+      // Final
+      final tie = _uclTournament!.finalTie;
+      if (tie != null && !tie.leg1.isPlayed && (tie.clubA == _userClub || tie.clubB == _userClub)) {
+        final lgw = _getLeagueGwForUclMatchday(11, totalGameweeks: _totalGameweeks);
+        final f = tie.leg1;
+        final isHome = f.homeClub == _userClub;
+        return CareerUpcomingMatch(
+          competitionId: 'ucl',
+          competitionName: 'UEFA CHAMPIONS LEAGUE',
+          competitionShortName: 'UCL',
+          competitionColor: const Color(0xFF4A90E2),
+          competitionIcon: Icons.stars_rounded,
+          stageTitle: 'UCL Final',
+          leagueGameweek: lgw,
+          homeClub: f.homeClub,
+          awayClub: f.awayClub,
+          homeCode: _lookupClubCode(f.homeClub, activeLeague),
+          awayCode: _lookupClubCode(f.awayClub, activeLeague),
+          isUserHome: isHome,
+          opponentClub: isHome ? f.awayClub : f.homeClub,
+          opponentCode: isHome ? _lookupClubCode(f.awayClub, activeLeague) : _lookupClubCode(f.homeClub, activeLeague),
+        );
+      }
+
+      return null;
+    }
+
+    if (compId == 'fa_cup') {
+      if (_faCupTournament == null || !_faCupTournament!.isUserClubAlive) return null;
+      final f = _faCupTournament!.fixtures
+          .where((f) => !f.isPlayed && (f.homeClub == _userClub || f.awayClub == _userClub) && f.matchday >= _currentGameweek)
+          .firstOrNull;
+      if (f == null) return null;
+      final isHome = f.homeClub == _userClub;
+      final homeCode = _lookupClubCode(f.homeClub, activeLeague);
+      final awayCode = _lookupClubCode(f.awayClub, activeLeague);
+      return CareerUpcomingMatch(
+        competitionId: 'fa_cup',
+        competitionName: 'THE EMIRATES FA CUP',
+        competitionShortName: 'FA CUP',
+        competitionColor: const Color(0xFFE53935),
+        competitionIcon: Icons.emoji_events_rounded,
+        stageTitle: f.stage,
+        leagueGameweek: f.matchday,
+        homeClub: f.homeClub,
+        awayClub: f.awayClub,
+        homeCode: homeCode,
+        awayCode: awayCode,
+        isUserHome: isHome,
+        opponentClub: isHome ? f.awayClub : f.homeClub,
+        opponentCode: isHome ? awayCode : homeCode,
+      );
+    }
+
+    if (compId == 'carabao_cup') {
+      if (_carabaoCupTournament == null || !_carabaoCupTournament!.isUserClubAlive) return null;
+      final f = _carabaoCupTournament!.fixtures
+          .where((f) => !f.isPlayed && (f.homeClub == _userClub || f.awayClub == _userClub) && f.matchday >= _currentGameweek)
+          .firstOrNull;
+      if (f == null) return null;
+      final isHome = f.homeClub == _userClub;
+      final homeCode = _lookupClubCode(f.homeClub, activeLeague);
+      final awayCode = _lookupClubCode(f.awayClub, activeLeague);
+      return CareerUpcomingMatch(
+        competitionId: 'carabao_cup',
+        competitionName: 'CARABAO CUP',
+        competitionShortName: 'CARABAO',
+        competitionColor: const Color(0xFF00C853),
+        competitionIcon: Icons.shield_rounded,
+        stageTitle: f.stage,
+        leagueGameweek: f.matchday,
+        homeClub: f.homeClub,
+        awayClub: f.awayClub,
+        homeCode: homeCode,
+        awayCode: awayCode,
+        isUserHome: isHome,
+        opponentClub: isHome ? f.awayClub : f.homeClub,
+        opponentCode: isHome ? awayCode : homeCode,
+      );
+    }
+
     return null;
+  }
+
+  List<CareerUpcomingMatch> _getAllUpcomingNextMatches(LeagueDefinition activeLeague) {
+    final list = <CareerUpcomingMatch>[];
+    final l = _getNextFixtureForCompetition('league', activeLeague);
+    if (l != null) list.add(l);
+    final u = _getNextFixtureForCompetition('ucl', activeLeague);
+    if (u != null) list.add(u);
+    final c = _getNextFixtureForCompetition('carabao_cup', activeLeague);
+    if (c != null) list.add(c);
+    final f = _getNextFixtureForCompetition('fa_cup', activeLeague);
+    if (f != null) list.add(f);
+    list.sort((a, b) => a.leagueGameweek.compareTo(b.leagueGameweek));
+    return list;
   }
 
   /// Builds a prominent transfer window status banner (Issue #12)
@@ -7828,14 +8314,18 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
   }
 
   /// Builds a dedicated upcoming fixture preview card with venue and kick-off button (Issue #12)
+  /// Builds a dedicated upcoming fixture preview card with venue, multi-competition tabs, and kick-off button (Issue #12 & User Next Match Fix)
   Widget _buildNextFixtureCard({
     required LeagueDefinition activeLeague,
     required bool isDark,
     required Color ink,
     required Color inkMuted,
   }) {
-    final fixture = _nextUserFixture;
-    if (fixture == null) {
+    final matchesThisGw = _getUpcomingMatchesForMatchday(activeLeague);
+    final allUpcoming = _getAllUpcomingNextMatches(activeLeague);
+
+    // If campaign complete across all competitions
+    if (matchesThisGw.isEmpty && allUpcoming.isEmpty && _currentGameweek > _totalGameweeks) {
       return Container(
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
@@ -7856,7 +8346,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                     style: AppTypography.sectionHeader(AppPalette.gold),
                   ),
                   Text(
-                    'All $_totalGameweeks matchdays concluded. Review final standings and advance.',
+                    'All $_totalGameweeks matchdays concluded across all competitions. Review final standings and advance.',
                     style: AppTypography.bodySmall(inkMuted),
                   ),
                 ],
@@ -7875,22 +8365,20 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       );
     }
 
-    final isHome = fixture.homeClub == _userClub;
-    final homeCode = fixture.homeClub == _userClub
-        ? _userClubCode
-        : (activeLeague.clubCodes[fixture.homeClub] ??
-            fixture.homeClub.substring(0, min(3, fixture.homeClub.length)).toUpperCase());
-    final awayCode = fixture.awayClub == _userClub
-        ? _userClubCode
-        : (activeLeague.clubCodes[fixture.awayClub] ??
-            fixture.awayClub.substring(0, min(3, fixture.awayClub.length)).toUpperCase());
-    final opponentCode = isHome ? awayCode : homeCode;
+    final filterOptions = [
+      {'label': 'THIS MATCHDAY', 'count': matchesThisGw.length},
+      {'label': 'ALL UPCOMING', 'count': allUpcoming.length},
+      {'label': 'LEAGUE', 'compId': 'league'},
+      {'label': 'UCL', 'compId': 'ucl'},
+      {'label': 'FA CUP', 'compId': 'fa_cup'},
+      {'label': 'CARABAO', 'compId': 'carabao_cup'},
+    ];
 
     return Container(
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: isDark ? AppPalette.darkCard : AppPalette.lightCard,
-        borderRadius: BorderRadius.circular(12),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(
           color: AppPalette.gold.withValues(alpha: 0.35),
           width: 1,
@@ -7899,118 +8387,269 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
+          // 1. Filter Pills Row
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            physics: const BouncingScrollPhysics(),
+            child: Row(
+              children: List.generate(filterOptions.length, (idx) {
+                final isSelected = _nextFixtureFilterIndex == idx;
+                final opt = filterOptions[idx];
+                final label = opt['label'] as String;
+                final count = opt['count'] as int?;
+                return Padding(
+                  padding: const EdgeInsets.only(right: 6),
+                  child: InkWell(
+                    onTap: () => setState(() => _nextFixtureFilterIndex = idx),
+                    borderRadius: BorderRadius.circular(6),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? AppPalette.gold
+                            : (isDark ? AppPalette.darkSurfaceRaised : AppPalette.lightSurfaceRaised),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(
+                          color: isSelected ? AppPalette.gold : Theme.of(context).dividerColor.withValues(alpha: 0.5),
+                        ),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            label,
+                            style: TextStyle(
+                              fontFamily: AppTypography.bodyFamily,
+                              fontSize: 10.5,
+                              fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                              color: isSelected ? (isDark ? Colors.black : Colors.white) : inkMuted,
+                              letterSpacing: 0.3,
+                            ),
+                          ),
+                          if (count != null && count > 0) ...[
+                            const SizedBox(width: 4),
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                              decoration: BoxDecoration(
+                                color: isSelected ? (isDark ? Colors.black : Colors.white) : AppPalette.gold.withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(8),
+                              ),
+                              child: Text(
+                                '$count',
+                                style: TextStyle(
+                                  fontFamily: AppTypography.bodyFamily,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w800,
+                                  color: isSelected ? (isDark ? AppPalette.gold : Colors.black) : AppPalette.gold,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                );
+              }),
+            ),
+          ),
+
+          const SizedBox(height: 12),
+
+          // 2. Filter Content Body
+          if (_nextFixtureFilterIndex == 0) ...[
+            // THIS MATCHDAY
+            if (matchesThisGw.isEmpty) ...[
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Center(
+                  child: Text('No fixtures scheduled for Matchday $_currentGameweek', style: AppTypography.bodySmall(inkMuted)),
+                ),
+              ),
+            ] else if (matchesThisGw.length == 1) ...[
+              _buildFixtureMatchTile(
+                match: matchesThisGw.first,
+                isDark: isDark,
+                ink: ink,
+                inkMuted: inkMuted,
+              ),
+            ] else ...[
+              // Multi-competition matchday banner
               Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  const Icon(Icons.stadium_rounded, size: 14, color: AppPalette.gold),
-                  const SizedBox(width: 5),
-                  Text(
-                    'NEXT FIXTURE • GW $_currentGameweek OF $_totalGameweeks',
-                    style: AppTypography.caption(AppPalette.gold).copyWith(fontWeight: FontWeight.w700),
+                  Row(
+                    children: [
+                      const Icon(Icons.flash_on_rounded, size: 14, color: AppPalette.gold),
+                      const SizedBox(width: 5),
+                      Text(
+                        'MULTI-COMPETITION MATCHDAY • GW $_currentGameweek',
+                        style: AppTypography.caption(AppPalette.gold).copyWith(fontWeight: FontWeight.w800),
+                      ),
+                    ],
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: AppPalette.gold.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      '${matchesThisGw.length} FIXTURES',
+                      style: TextStyle(
+                        fontFamily: AppTypography.bodyFamily,
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w800,
+                        color: AppPalette.gold,
+                      ),
+                    ),
                   ),
                 ],
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                decoration: BoxDecoration(
-                  color: isHome ? AppPalette.green.withValues(alpha: 0.15) : AppPalette.blue.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(4),
+              const SizedBox(height: 8),
+              ...matchesThisGw.map((m) => Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: _buildFixtureMatchTile(
+                  match: m,
+                  isDark: isDark,
+                  ink: ink,
+                  inkMuted: inkMuted,
                 ),
-                child: Text(
-                  isHome ? 'HOME' : 'AWAY',
-                  style: TextStyle(
-                    fontFamily: AppTypography.bodyFamily,
-                    fontSize: 10,
-                    fontWeight: FontWeight.w800,
-                    color: isHome ? AppPalette.green : AppPalette.blue,
+              )),
+            ],
+          ] else if (_nextFixtureFilterIndex == 1) ...[
+            // ALL UPCOMING CALENDAR
+            Row(
+              children: [
+                const Icon(Icons.calendar_month_rounded, size: 14, color: AppPalette.gold),
+                const SizedBox(width: 5),
+                Text(
+                  'UPCOMING FIXTURES BY COMPETITION',
+                  style: AppTypography.caption(AppPalette.gold).copyWith(fontWeight: FontWeight.w800),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            if (allUpcoming.isEmpty) ...[
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12),
+                child: Center(
+                  child: Text('No further upcoming fixtures found', style: AppTypography.bodySmall(inkMuted)),
+                ),
+              ),
+            ] else ...[
+              ...allUpcoming.map((m) => Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: _buildFixtureMatchTile(
+                  match: m,
+                  isDark: isDark,
+                  ink: ink,
+                  inkMuted: inkMuted,
+                  showGameweekBadge: true,
+                ),
+              )),
+            ],
+          ] else ...[
+            // SPECIFIC COMPETITION (2: League, 3: UCL, 4: FA Cup, 5: Carabao)
+            () {
+              final compId = filterOptions[_nextFixtureFilterIndex]['compId'] as String;
+              final m = _getNextFixtureForCompetition(compId, activeLeague);
+              if (m != null) {
+                final isThisGw = m.leagueGameweek == _currentGameweek;
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(m.competitionIcon, size: 14, color: m.competitionColor),
+                            const SizedBox(width: 5),
+                            Text(
+                              'NEXT ${m.competitionName}',
+                              style: AppTypography.caption(m.competitionColor).copyWith(fontWeight: FontWeight.w800),
+                            ),
+                          ],
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: isThisGw ? AppPalette.green.withValues(alpha: 0.15) : m.competitionColor.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            isThisGw ? 'THIS MATCHDAY' : 'GW ${m.leagueGameweek} (IN ${m.leagueGameweek - _currentGameweek} GWs)',
+                            style: TextStyle(
+                              fontFamily: AppTypography.bodyFamily,
+                              fontSize: 9.5,
+                              fontWeight: FontWeight.w800,
+                              color: isThisGw ? AppPalette.green : m.competitionColor,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    _buildFixtureMatchTile(
+                      match: m,
+                      isDark: isDark,
+                      ink: ink,
+                      inkMuted: inkMuted,
+                    ),
+                  ],
+                );
+              } else {
+                final compName = filterOptions[_nextFixtureFilterIndex]['label'] as String;
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 16),
+                  decoration: BoxDecoration(
+                    color: isDark ? AppPalette.darkSurfaceRaised : AppPalette.lightSurfaceRaised,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Theme.of(context).dividerColor),
                   ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              // Home team
-              Expanded(
-                child: Row(
-                  children: [
-                    ClubBadge(code: homeCode, size: 28),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            fixture.homeClub,
-                            style: AppTypography.bodyMedium(ink).copyWith(
-                              fontWeight: fixture.homeClub == _userClub ? FontWeight.w800 : FontWeight.w600,
-                              color: fixture.homeClub == _userClub ? AppPalette.gold : ink,
+                  child: Row(
+                    children: [
+                      Icon(Icons.info_outline_rounded, color: inkMuted, size: 22),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '$compName CAMPAIGN INACTIVE',
+                              style: AppTypography.caption(ink).copyWith(fontWeight: FontWeight.w800),
                             ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          if (fixture.homeClub == _userClub)
-                            Text('YOUR CLUB', style: AppTypography.caption(AppPalette.gold).copyWith(fontSize: 9)),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              // VS separator
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                margin: const EdgeInsets.symmetric(horizontal: 6),
-                decoration: BoxDecoration(
-                  color: isDark ? AppPalette.darkSurfaceRaised : AppPalette.lightSurfaceRaised,
-                  borderRadius: BorderRadius.circular(6),
-                ),
-                child: Text(
-                  'VS',
-                  style: AppTypography.caption(inkMuted).copyWith(fontWeight: FontWeight.w800, fontSize: 10),
-                ),
-              ),
-              // Away team
-              Expanded(
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        children: [
-                          Text(
-                            fixture.awayClub,
-                            style: AppTypography.bodyMedium(ink).copyWith(
-                              fontWeight: fixture.awayClub == _userClub ? FontWeight.w800 : FontWeight.w600,
-                              color: fixture.awayClub == _userClub ? AppPalette.gold : ink,
+                            const SizedBox(height: 2),
+                            Text(
+                              'No remaining fixtures scheduled in $compName for this season.',
+                              style: AppTypography.caption(inkMuted).copyWith(fontSize: 11),
                             ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.end,
-                          ),
-                          if (fixture.awayClub == _userClub)
-                            Text('YOUR CLUB', style: AppTypography.caption(AppPalette.gold).copyWith(fontSize: 9)),
-                        ],
+                          ],
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    ClubBadge(code: awayCode, size: 28),
-                  ],
-                ),
-              ),
-            ],
-          ),
+                    ],
+                  ),
+                );
+              }
+            }(),
+          ],
+
           const SizedBox(height: 12),
+
+          // 3. Primary Kick Off Button
           SizedBox(
             width: double.infinity,
             child: FilledButton.icon(
               onPressed: _simMatchday,
               icon: const Icon(Icons.play_arrow_rounded, size: 18),
-              label: Text('Kick Off vs $opponentCode (Gameweek $_currentGameweek)'),
+              label: Text(
+                matchesThisGw.isEmpty
+                    ? 'Kick Off Matchday $_currentGameweek'
+                    : (matchesThisGw.length == 1
+                        ? 'Kick Off vs ${matchesThisGw.first.opponentCode} (Gameweek $_currentGameweek)'
+                        : 'Kick Off Matchday (${matchesThisGw.length} Matches • Gameweek $_currentGameweek)'),
+              ),
               style: FilledButton.styleFrom(
                 backgroundColor: AppPalette.gold,
                 foregroundColor: isDark ? AppPalette.darkBg : Colors.white,
@@ -8019,7 +8658,20 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
               ),
             ),
           ),
+
+          if (matchesThisGw.length > 1) ...[
+            const SizedBox(height: 4),
+            Center(
+              child: Text(
+                'Includes: ${matchesThisGw.map((m) => m.competitionShortName).join(' + ')}',
+                style: AppTypography.caption(AppPalette.gold).copyWith(fontSize: 10.5, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+
           const SizedBox(height: 8),
+
+          // 4. View Calendar Button
           SizedBox(
             width: double.infinity,
             child: OutlinedButton.icon(
@@ -8039,6 +8691,205 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFixtureMatchTile({
+    required CareerUpcomingMatch match,
+    required bool isDark,
+    required Color ink,
+    required Color inkMuted,
+    bool showGameweekBadge = false,
+  }) {
+    final isHome = match.isUserHome;
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: isDark ? AppPalette.darkSurfaceRaised : AppPalette.lightSurfaceRaised,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: match.competitionColor.withValues(alpha: 0.35),
+          width: 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Competition bar + venue
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Icon(match.competitionIcon, size: 13, color: match.competitionColor),
+                  const SizedBox(width: 5),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: match.competitionColor.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      match.competitionShortName,
+                      style: TextStyle(
+                        fontFamily: AppTypography.bodyFamily,
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w800,
+                        color: match.competitionColor,
+                        letterSpacing: 0.4,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    match.stageTitle,
+                    style: AppTypography.caption(inkMuted).copyWith(fontSize: 10.5, fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+              Row(
+                children: [
+                  if (showGameweekBadge) ...[
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      margin: const EdgeInsets.only(right: 5),
+                      decoration: BoxDecoration(
+                        color: match.leagueGameweek == _currentGameweek
+                            ? AppPalette.gold.withValues(alpha: 0.2)
+                            : (isDark ? Colors.white10 : Colors.black12),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        match.leagueGameweek == _currentGameweek ? 'THIS GW' : 'GW ${match.leagueGameweek}',
+                        style: TextStyle(
+                          fontFamily: AppTypography.bodyFamily,
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w800,
+                          color: match.leagueGameweek == _currentGameweek ? AppPalette.gold : inkMuted,
+                        ),
+                      ),
+                    ),
+                  ],
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: isHome ? AppPalette.green.withValues(alpha: 0.15) : AppPalette.blue.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      isHome ? 'HOME' : 'AWAY',
+                      style: TextStyle(
+                        fontFamily: AppTypography.bodyFamily,
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w800,
+                        color: isHome ? AppPalette.green : AppPalette.blue,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 10),
+
+          // Teams Matchup Row
+          Row(
+            children: [
+              // Home team
+              Expanded(
+                child: Row(
+                  children: [
+                    ClubBadge(code: match.homeCode, size: 26),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            match.homeClub,
+                            style: AppTypography.bodyMedium(ink).copyWith(
+                              fontWeight: match.homeClub == _userClub ? FontWeight.w800 : FontWeight.w600,
+                              color: match.homeClub == _userClub ? AppPalette.gold : ink,
+                              fontSize: 13,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          if (match.homeClub == _userClub)
+                            Text('YOUR CLUB', style: AppTypography.caption(AppPalette.gold).copyWith(fontSize: 8.5)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              // VS separator or Agg score
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                margin: const EdgeInsets.symmetric(horizontal: 6),
+                decoration: BoxDecoration(
+                  color: isDark ? AppPalette.darkSurfaceRaised.withValues(alpha: 0.6) : AppPalette.lightSurfaceRaised,
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: Theme.of(context).dividerColor.withValues(alpha: 0.5)),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'VS',
+                      style: AppTypography.caption(inkMuted).copyWith(fontWeight: FontWeight.w800, fontSize: 9.5),
+                    ),
+                    if (match.aggregateScore != null)
+                      Text(
+                        match.aggregateScore!,
+                        style: TextStyle(
+                          fontFamily: AppTypography.bodyFamily,
+                          fontSize: 8.5,
+                          fontWeight: FontWeight.w700,
+                          color: AppPalette.gold,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+
+              // Away team
+              Expanded(
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            match.awayClub,
+                            style: AppTypography.bodyMedium(ink).copyWith(
+                              fontWeight: match.awayClub == _userClub ? FontWeight.w800 : FontWeight.w600,
+                              color: match.awayClub == _userClub ? AppPalette.gold : ink,
+                              fontSize: 13,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.end,
+                          ),
+                          if (match.awayClub == _userClub)
+                            Text('YOUR CLUB', style: AppTypography.caption(AppPalette.gold).copyWith(fontSize: 8.5)),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    ClubBadge(code: match.awayCode, size: 26),
+                  ],
+                ),
+              ),
+            ],
           ),
         ],
       ),

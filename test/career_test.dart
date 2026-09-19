@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -4756,6 +4757,147 @@ void main() {
       expect(allGi, equals(40));
       final uclGi = getPlayerGoals('cr7', compKey: 'ucl') + getPlayerAssists('cr7', compKey: 'ucl');
       expect(uclGi, equals(10));
+    });
+  });
+
+  group('Multi-Competition Next Fixtures & Scheduling', () {
+    test('CareerUpcomingMatch model stores full multi-competition metadata', () {
+      const match = CareerUpcomingMatch(
+        competitionId: 'ucl',
+        competitionName: 'UEFA CHAMPIONS LEAGUE',
+        competitionShortName: 'UCL',
+        competitionColor: Color(0xFF4A90E2),
+        competitionIcon: Icons.stars_rounded,
+        stageTitle: 'Quarter-Finals • Leg 2',
+        leagueGameweek: 25,
+        homeClub: 'Manchester United',
+        awayClub: 'Real Madrid',
+        homeCode: 'MUN',
+        awayCode: 'RMA',
+        isUserHome: true,
+        opponentClub: 'Real Madrid',
+        opponentCode: 'RMA',
+        aggregateScore: 'Agg: 2-1',
+      );
+
+      expect(match.competitionId, equals('ucl'));
+      expect(match.competitionShortName, equals('UCL'));
+      expect(match.isUserHome, isTrue);
+      expect(match.opponentCode, equals('RMA'));
+      expect(match.aggregateScore, equals('Agg: 2-1'));
+      expect(match.leagueGameweek, equals(25));
+    });
+
+    test('Calendar gameweek mappings accurately trigger multi-competition matchdays', () {
+      // 38-GW calendar mappings
+      // GW 3: UCL Group MD 1
+      expect(UclTournament.getUclMatchdayForLeagueGw(3, totalGameweeks: 38), equals(1));
+      // GW 5: Carabao Cup Round of 16
+      expect(CupTournament.getCarabaoRoundForLeagueGw(5, totalGameweeks: 38), equals(1));
+      // GW 6: UCL Group MD 2
+      expect(UclTournament.getUclMatchdayForLeagueGw(6, totalGameweeks: 38), equals(2));
+      // GW 8: FA Cup Round of 16
+      expect(CupTournament.getFaCupRoundForLeagueGw(8, totalGameweeks: 38), equals(1));
+      // GW 11: Carabao Cup Quarter-Finals
+      expect(CupTournament.getCarabaoRoundForLeagueGw(11, totalGameweeks: 38), equals(2));
+      // GW 14: FA Cup Quarter-Finals
+      expect(CupTournament.getFaCupRoundForLeagueGw(14, totalGameweeks: 38), equals(2));
+      // GW 22: UCL QF Leg 1
+      expect(UclTournament.getUclMatchdayForLeagueGw(22, totalGameweeks: 38), equals(7));
+      // GW 24: Carabao Cup Final
+      expect(CupTournament.getCarabaoRoundForLeagueGw(24, totalGameweeks: 38), equals(4));
+      // GW 29: FA Cup Semi-Finals
+      expect(CupTournament.getFaCupRoundForLeagueGw(29, totalGameweeks: 38), equals(3));
+      // GW 35: UCL Final
+      expect(UclTournament.getUclMatchdayForLeagueGw(35, totalGameweeks: 38), equals(11));
+      // GW 37: FA Cup Final
+      expect(CupTournament.getFaCupRoundForLeagueGw(37, totalGameweeks: 38), equals(4));
+
+      // 18-GW calendar mappings
+      expect(UclTournament.getUclMatchdayForLeagueGw(2, totalGameweeks: 18), equals(1));
+      expect(CupTournament.getCarabaoRoundForLeagueGw(3, totalGameweeks: 18), equals(1));
+      expect(CupTournament.getFaCupRoundForLeagueGw(5, totalGameweeks: 18), equals(1));
+      expect(UclTournament.getUclMatchdayForLeagueGw(18, totalGameweeks: 18), equals(11));
+    });
+
+    test('Multi-competition fixtures are sorted chronologically by gameweek', () {
+      final fixtures = <CareerUpcomingMatch>[
+        const CareerUpcomingMatch(
+          competitionId: 'fa_cup',
+          competitionName: 'THE EMIRATES FA CUP',
+          competitionShortName: 'FA CUP',
+          competitionColor: Color(0xFFE53935),
+          competitionIcon: Icons.emoji_events_rounded,
+          stageTitle: 'Round of 16',
+          leagueGameweek: 8,
+          homeClub: 'Manchester United',
+          awayClub: 'Aston Villa',
+          homeCode: 'MUN',
+          awayCode: 'AVL',
+          isUserHome: true,
+          opponentClub: 'Aston Villa',
+          opponentCode: 'AVL',
+        ),
+        const CareerUpcomingMatch(
+          competitionId: 'league',
+          competitionName: 'PREMIER LEAGUE',
+          competitionShortName: 'LEAGUE',
+          competitionColor: Color(0xFFD4AF37),
+          competitionIcon: Icons.sports_soccer_rounded,
+          stageTitle: 'GW 4 OF 38',
+          leagueGameweek: 4,
+          homeClub: 'Chelsea',
+          awayClub: 'Manchester United',
+          homeCode: 'CHE',
+          awayCode: 'MUN',
+          isUserHome: false,
+          opponentClub: 'Chelsea',
+          opponentCode: 'CHE',
+        ),
+        const CareerUpcomingMatch(
+          competitionId: 'carabao_cup',
+          competitionName: 'CARABAO CUP',
+          competitionShortName: 'CARABAO',
+          competitionColor: Color(0xFF00C853),
+          competitionIcon: Icons.shield_rounded,
+          stageTitle: 'Round of 16',
+          leagueGameweek: 5,
+          homeClub: 'Manchester United',
+          awayClub: 'Everton',
+          homeCode: 'MUN',
+          awayCode: 'EVE',
+          isUserHome: true,
+          opponentClub: 'Everton',
+          opponentCode: 'EVE',
+        ),
+        const CareerUpcomingMatch(
+          competitionId: 'ucl',
+          competitionName: 'UEFA CHAMPIONS LEAGUE',
+          competitionShortName: 'UCL',
+          competitionColor: Color(0xFF4A90E2),
+          competitionIcon: Icons.stars_rounded,
+          stageTitle: 'Group Stage • MD 2',
+          leagueGameweek: 6,
+          homeClub: 'Bayern Munich',
+          awayClub: 'Manchester United',
+          homeCode: 'BAY',
+          awayCode: 'MUN',
+          isUserHome: false,
+          opponentClub: 'Bayern Munich',
+          opponentCode: 'BAY',
+        ),
+      ];
+
+      fixtures.sort((a, b) => a.leagueGameweek.compareTo(b.leagueGameweek));
+
+      expect(fixtures[0].competitionShortName, equals('LEAGUE')); // GW 4
+      expect(fixtures[0].leagueGameweek, equals(4));
+      expect(fixtures[1].competitionShortName, equals('CARABAO')); // GW 5
+      expect(fixtures[1].leagueGameweek, equals(5));
+      expect(fixtures[2].competitionShortName, equals('UCL')); // GW 6
+      expect(fixtures[2].leagueGameweek, equals(6));
+      expect(fixtures[3].competitionShortName, equals('FA CUP')); // GW 8
+      expect(fixtures[3].leagueGameweek, equals(8));
     });
   });
 }
