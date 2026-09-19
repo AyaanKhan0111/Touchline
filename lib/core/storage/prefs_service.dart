@@ -139,6 +139,7 @@ class PrefsService {
   static const _keyCareerActiveSquadEvents = 'career_active_squad_events';
   static const _keyCareerPlayerContracts = 'career_player_contracts';
   static const _keyCareerCustomFormationSlots = 'career_custom_formation_slots';
+  static const _keyCareerAiClubSquads = 'career_ai_club_squads';
 
   Future<Map<String, dynamic>?> getCareerConfig() async {
     final p = await prefs;
@@ -355,6 +356,15 @@ class PrefsService {
       } catch (_) {}
     }
 
+    final aiSquadsRaw = p.getString(_keyCareerAiClubSquads);
+    Map<String, List<String>> aiClubSquads = {};
+    if (aiSquadsRaw != null) {
+      try {
+        final decoded = jsonDecode(aiSquadsRaw) as Map<String, dynamic>;
+        aiClubSquads = decoded.map((k, v) => MapEntry(k, (v as List).map((e) => e.toString()).toList()));
+      } catch (_) {}
+    }
+
     return {
       'leagueId': p.getString(_keyCareerLeagueId) ?? 'premier_league',
       'clubName': clubName,
@@ -391,6 +401,7 @@ class PrefsService {
       'activeSquadEvents': activeSquadEvents,
       'playerContracts': playerContracts,
       'customFormationSlots': customFormationSlots,
+      'aiClubSquads': aiClubSquads,
     };
   }
 
@@ -430,6 +441,7 @@ class PrefsService {
     List<Map<String, dynamic>>? activeSquadEvents,
     Map<String, int>? playerContracts,
     Map<String, List<Map<String, dynamic>>>? customFormationSlots,
+    Map<String, List<String>>? aiClubSquads,
   }) async {
     final p = await prefs;
     await p.setString(_keyCareerLeagueId, leagueId);
@@ -516,6 +528,9 @@ class PrefsService {
     if (customFormationSlots != null) {
       await p.setString(_keyCareerCustomFormationSlots, jsonEncode(customFormationSlots));
     }
+    if (aiClubSquads != null) {
+      await p.setString(_keyCareerAiClubSquads, jsonEncode(aiClubSquads));
+    }
   }
 
   Future<void> clearCareerConfig() async {
@@ -557,5 +572,6 @@ class PrefsService {
     await p.remove(_keyCareerActiveSquadEvents);
     await p.remove(_keyCareerPlayerContracts);
     await p.remove(_keyCareerCustomFormationSlots);
+    await p.remove(_keyCareerAiClubSquads);
   }
 }

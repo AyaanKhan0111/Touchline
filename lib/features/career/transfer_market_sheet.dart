@@ -34,6 +34,8 @@ class TransferMarketSheet extends StatefulWidget {
   final int currentSeason;
   final int pendingOffersCount;
   final VoidCallback? onViewOffers;
+  final String userClubName;
+  final Map<String, String>? playerActiveClubs;
 
   const TransferMarketSheet({
     super.key,
@@ -45,6 +47,8 @@ class TransferMarketSheet extends StatefulWidget {
     this.currentSeason = 1,
     this.pendingOffersCount = 0,
     this.onViewOffers,
+    this.userClubName = 'Your Club',
+    this.playerActiveClubs,
   });
 
   @override
@@ -67,6 +71,30 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
     _currentBudget = widget.budget;
     _ownedPlayerNames = widget.userSquad.map((p) => p.name.trim().toLowerCase()).toList();
     _loadPlayers();
+  }
+
+  String _resolvePlayerClub(Player player, {required bool isOwned, required ContractStatus contractStatus}) {
+    final normName = player.name.trim().toLowerCase();
+    if (isOwned) {
+      return widget.userClubName;
+    }
+    if (widget.playerActiveClubs != null && widget.playerActiveClubs!.containsKey(normName)) {
+      return widget.playerActiveClubs![normName]!;
+    }
+    if (contractStatus.isFreeAgent) {
+      return 'Free Agent';
+    }
+    return player.teamName;
+  }
+
+  bool _matchesSearch(Player p, String qLower) {
+    if (qLower.isEmpty) return true;
+    if (p.name.toLowerCase().contains(qLower)) return true;
+    if (p.nationality?.toLowerCase().contains(qLower) ?? false) return true;
+    final isOwned = _ownedPlayerNames.contains(p.name.trim().toLowerCase());
+    final contractStatus = TransferMarketService.computePlayerContract(p.name, widget.currentSeason);
+    final activeClub = _resolvePlayerClub(p, isOwned: isOwned, contractStatus: contractStatus);
+    return activeClub.toLowerCase().contains(qLower);
   }
 
   @override
@@ -241,6 +269,10 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
           }
           break;
       }
+      if (query.isNotEmpty) {
+        final qLower = query.toLowerCase();
+        loaded = loaded.where((p) => _matchesSearch(p, qLower)).toList();
+      }
 
       if (mounted) {
         setState(() {
@@ -288,7 +320,7 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
               style: AppTypography.bodySmall(ink.withValues(alpha: 0.7)),
             ),
             Text(
-              'Current Club: ${player.teamName}',
+              'Current Club: ${_resolvePlayerClub(player, isOwned: _ownedPlayerNames.contains(player.name.trim().toLowerCase()), contractStatus: contractStatus)}',
               style: AppTypography.bodySmall(ink.withValues(alpha: 0.7)),
             ),
             const SizedBox(height: 12),
@@ -368,6 +400,7 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
               setState(() {
                 _currentBudget -= effectiveFee;
                 _ownedPlayerNames.add(player.name.trim().toLowerCase());
+                widget.playerActiveClubs?[player.name.trim().toLowerCase()] = widget.userClubName;
               });
               widget.onSignPlayer(player, effectiveFee, contractYears);
               ScaffoldMessenger.of(context).showSnackBar(
@@ -659,9 +692,16 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
                           final canAfford = _currentBudget >= fee;
                           final isSquadFull = widget.userSquad.length >= 25;
                           final isWonderkid = (player.potential ?? 0) > player.overall && (player.age ?? 25) <= 21;
+                          final displayClub = _resolvePlayerClub(player, isOwned: isOwned, contractStatus: contractStatus);
 
                           return InkWell(
-                            onTap: () => showPlayerDetailSheet(context, player),
+                            onTap: () => showPlayerDetailSheet(
+                              context,
+                              player,
+                              isCareerMode: true,
+                              careerClubName: displayClub,
+                              careerSeason: widget.currentSeason,
+                            ),
                             child: Padding(
                               padding: const EdgeInsets.symmetric(vertical: 8),
                               child: Row(
@@ -697,7 +737,7 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
                                           children: [
                                             Flexible(
                                               child: Text(
-                                                'Age ${player.age?.toInt() ?? 26} • ${player.teamName}',
+                                                'Age ${player.age?.toInt() ?? 26} • $displayClub',
                                                 style: AppTypography.caption(inkMuted),
                                                 maxLines: 1,
                                                 overflow: TextOverflow.ellipsis,

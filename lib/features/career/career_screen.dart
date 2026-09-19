@@ -980,6 +980,15 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       _playerContracts[p.name] ??= TransferMarketService.computePlayerContract(p.name, _currentSeason).seasonsRemaining.clamp(2, 5);
     }
 
+    // Restore saved AI club squads (Fix 34 / Issue: Global Player Exclusivity)
+    final savedAiSquads = saved['aiClubSquads'] as Map<dynamic, dynamic>? ?? {};
+    _aiClubSquads.clear();
+    for (final entry in savedAiSquads.entries) {
+      if (entry.value is List) {
+        _aiClubSquads[entry.key.toString()] = (entry.value as List).map((e) => e.toString()).toList();
+      }
+    }
+
     // Pre-cache authentic AI club squads for realistic match reports
     await _cacheLeagueClubSquads(db);
 
@@ -989,6 +998,103 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     });
   }
 
+  /// Hydrates SimPlayer models from database for a saved list of player names
+  Future<List<SimPlayer>> _loadSimPlayersForNames(Database db, List<String> names, String club) async {
+    if (names.isEmpty) return [];
+    final placeholders = List.filled(names.length, '?').join(',');
+    final rows = await db.rawQuery('''
+      SELECT player_name, primary_position, overall
+      FROM players
+      WHERE player_name IN ($placeholders)
+      ORDER BY overall DESC
+    ''', names);
+
+    final map = <String, SimPlayer>{};
+    for (final r in rows) {
+      final pName = r['player_name'] as String;
+      map.putIfAbsent(pName.trim().toLowerCase(), () => SimPlayer(
+        name: pName,
+        position: r['primary_position'] as String? ?? 'CM',
+        overall: (r['overall'] as num?)?.toInt() ?? 78,
+        isStarter: false,
+      ));
+    }
+
+    final result = <SimPlayer>[];
+    for (final n in names) {
+      final simP = map[n.trim().toLowerCase()];
+      if (simP != null) {
+        result.add(simP);
+      } else {
+        result.add(SimPlayer(
+          name: n,
+          position: 'CM',
+          overall: 78,
+          isStarter: false,
+        ));
+      }
+    }
+
+    if (result.length < 15) {
+      final needed = 15 - result.length;
+      for (int i = 1; i <= needed; i++) {
+        result.add(SimPlayer(
+          name: '$club Academy #$i',
+          position: i == 1 && !result.any((p) => p.position == 'GK') ? 'GK' : 'CM',
+          overall: 74,
+          isStarter: false,
+        ));
+      }
+    }
+
+    return SimEngine.normalizeSquadRoles(result);
+  }
+
+  /// Removes a player from all AI club squads (Fix 34: User Acquisitions Affect Other Clubs)
+  void _removePlayerFromAiClubs(String playerName) {
+    final target = playerName.trim().toLowerCase();
+    for (final club in _aiClubSquads.keys.toList()) {
+      _aiClubSquads[club]?.removeWhere((n) => n.trim().toLowerCase() == target);
+    }
+    for (final club in _aiClubPlayers.keys.toList()) {
+      final list = _aiClubPlayers[club];
+      if (list != null) {
+        final removedCount = list.where((p) => p.name.trim().toLowerCase() == target).length;
+        if (removedCount > 0) {
+          list.removeWhere((p) => p.name.trim().toLowerCase() == target);
+          if (list.length < 15) {
+            list.add(SimPlayer(
+              name: '$club Academy Reserve',
+              position: 'CM',
+              overall: 74,
+              isStarter: false,
+            ));
+          }
+          _aiClubPlayers[club] = SimEngine.normalizeSquadRoles(list);
+          _aiClubSquads[club] = _aiClubPlayers[club]!.map((p) => p.name).toList();
+        }
+      }
+    }
+  }
+
+  /// Builds a fast lookup of active clubs for all players in Career Mode (Fix 34)
+  Map<String, String> _buildPlayerActiveClubs() {
+    final map = <String, String>{};
+    _aiClubSquads.forEach((club, names) {
+      for (final name in names) {
+        map[name.trim().toLowerCase()] = club;
+      }
+    });
+    // User club always takes precedence
+    for (final p in _userSquad) {
+      map[p.name.trim().toLowerCase()] = _userClub;
+    }
+    return map;
+  }
+
+  /// Caches authentic AI club squads ensuring STRICT global exclusivity (Fix 34)
+  /// - A player belonging to the User Club NEVER appears in an AI club.
+  /// - An AI club cannot claim a player already claimed by another AI club.
   Future<void> _cacheLeagueClubSquads(Database db) async {
     final allClubsToCache = Set<String>.from(_leagueClubs);
     if (_uclTournament != null) {
@@ -997,9 +1103,43 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       allClubsToCache.addAll(UclTournament.kDefaultUclClubs);
     }
 
+    // Step 1: Global set of claimed player names (case-insensitive)
+    // The user's squad ALWAYS owns their players first and foremost.
+    final claimedPlayerNames = <String>{};
+    for (final p in _userSquad) {
+      claimedPlayerNames.add(p.name.trim().toLowerCase());
+    }
+
+    // Step 2: If AI squads were already saved/loaded, sanitize to guarantee no overlap with user or across AI clubs
+    for (final club in _aiClubSquads.keys.toList()) {
+      if (club == _userClub) {
+        _aiClubSquads.remove(club);
+        _aiClubPlayers.remove(club);
+        continue;
+      }
+      final existingNames = _aiClubSquads[club] ?? [];
+      final sanitized = <String>[];
+      for (final name in existingNames) {
+        final norm = name.trim().toLowerCase();
+        if (!claimedPlayerNames.contains(norm)) {
+          claimedPlayerNames.add(norm);
+          sanitized.add(name);
+        }
+      }
+      _aiClubSquads[club] = sanitized;
+      if (sanitized.length >= 15 && (!_aiClubPlayers.containsKey(club) || _aiClubPlayers[club]!.isEmpty)) {
+        _aiClubPlayers[club] = await _loadSimPlayersForNames(db, sanitized, club);
+      }
+    }
+
+    // Step 3: Populate any unpopulated club or clubs with fewer than 15 players
     for (final club in allClubsToCache) {
       if (club == _userClub) continue;
-      if (_aiClubPlayers.containsKey(club) && _aiClubPlayers[club]!.isNotEmpty) continue;
+      if (_aiClubPlayers.containsKey(club) &&
+          _aiClubPlayers[club]!.length >= 15 &&
+          (_aiClubSquads[club]?.length ?? 0) >= 15) {
+        continue;
+      }
 
       final queryClub = club == 'Inter Milan' ? 'Inter' : (club == 'Paris Saint-Germain' ? 'Paris' : club);
       final rows = await db.rawQuery('''
@@ -1009,23 +1149,43 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         ORDER BY overall DESC, season DESC
       ''', ['%$queryClub%']);
 
-      final seenNames = <String>{};
       final distinctRows = <Map<String, dynamic>>[];
+      final clubSquadNames = List<String>.from(_aiClubSquads[club] ?? []);
+
       for (final r in rows) {
         final name = (r['player_name'] as String).trim().toLowerCase();
-        if (seenNames.add(name)) {
+        // Skip if claimed by User Club or already claimed by another AI club
+        if (!claimedPlayerNames.contains(name)) {
+          claimedPlayerNames.add(name);
           distinctRows.add(r);
-          if (distinctRows.length == 25) break;
+          clubSquadNames.add(r['player_name'] as String);
+          if (clubSquadNames.length >= 22) break;
         }
       }
 
-      if (distinctRows.isNotEmpty) {
+      if (distinctRows.isNotEmpty || clubSquadNames.isNotEmpty) {
         final rawSimPlayers = distinctRows.map((r) => SimPlayer(
           name: r['player_name'] as String,
           position: r['primary_position'] as String? ?? 'CM',
           overall: (r['overall'] as num?)?.toInt() ?? 78,
           isStarter: false,
         )).toList();
+
+        if (_aiClubPlayers.containsKey(club) && _aiClubPlayers[club]!.isNotEmpty) {
+          rawSimPlayers.insertAll(0, _aiClubPlayers[club]!);
+        }
+
+        if (rawSimPlayers.length < 15) {
+          final needed = 15 - rawSimPlayers.length;
+          for (int i = 1; i <= needed; i++) {
+            rawSimPlayers.add(SimPlayer(
+              name: '$club Academy #$i',
+              position: i == 1 && !rawSimPlayers.any((p) => p.position == 'GK') ? 'GK' : 'CM',
+              overall: 74,
+              isStarter: false,
+            ));
+          }
+        }
 
         final tacticalAiSquad = SimEngine.normalizeSquadRoles(rawSimPlayers);
         _aiClubSquads[club] = tacticalAiSquad.map((p) => p.name).toList();
@@ -2173,6 +2333,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       customFormationSlots: _customFormationSlots.map(
         (k, v) => MapEntry(k, v.map((s) => s.toJson()).toList()),
       ),
+      aiClubSquads: _aiClubSquads,
     );
 
     final statePayload = <String, dynamic>{
@@ -2216,6 +2377,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       'pendingTransferOffers': pendingOffersList,
       'activeSquadEvents': activeEventsList,
       'playerContracts': _playerContracts,
+      'aiClubSquads': _aiClubSquads,
     };
 
     // 2. Dual-layer persistence: SQLite touchline_save.db career_save table (Issue #10)
@@ -2896,6 +3058,24 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       }
     }
 
+    final buyingClub = offer.buyingClub;
+    if (_aiClubSquads.containsKey(buyingClub)) {
+      _aiClubSquads[buyingClub]!.removeWhere((n) => n.trim().toLowerCase() == player.name.trim().toLowerCase());
+      _aiClubSquads[buyingClub]!.insert(0, player.name);
+    } else {
+      _aiClubSquads[buyingClub] = [player.name];
+    }
+    if (_aiClubPlayers.containsKey(buyingClub)) {
+      _aiClubPlayers[buyingClub]!.removeWhere((p) => p.name.trim().toLowerCase() == player.name.trim().toLowerCase());
+      _aiClubPlayers[buyingClub]!.insert(0, SimPlayer(
+        name: player.name,
+        position: player.primaryPosition,
+        overall: player.overall,
+        isStarter: true,
+      ));
+      _aiClubPlayers[buyingClub] = SimEngine.normalizeSquadRoles(_aiClubPlayers[buyingClub]!);
+    }
+
     SoundService.instance.playGoal();
     setState(() {
       _budgetMillions += offer.offeredFeeMillions;
@@ -2954,12 +3134,15 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         currentSeason: _currentSeason,
         pendingOffersCount: _pendingTransferOffers.where((o) => o.isPending).length,
         onViewOffers: _openInboundOffersSheet,
+        userClubName: _userClub,
+        playerActiveClubs: _buildPlayerActiveClubs(),
         onSignPlayer: (player, fee, [int contractYears = 3]) {
           SoundService.instance.playCorrect();
           setState(() {
             _budgetMillions = max(0.0, _budgetMillions - fee);
             _userSquad.add(player);
             _playerContracts[player.name] = contractYears;
+            _removePlayerFromAiClubs(player.name);
           });
           _persistCareerState();
         },

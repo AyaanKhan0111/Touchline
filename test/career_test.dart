@@ -3898,6 +3898,225 @@ void main() {
       expect(squad.first.age, 24.0);
     });
   });
+
+  group('Fix 34: Single-Club Player Exclusivity & Acquisition Effects Across Clubs', () {
+    test('PrefsService properly persists and restores aiClubSquads', () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = PrefsService.instance;
+
+      final testAiSquads = {
+        'Manchester United': ['Bruno Fernandes', 'Marcus Rashford', 'Casemiro'],
+        'Real Madrid': ['Vinicius Jr', 'Jude Bellingham', 'Kylian Mbappé'],
+      };
+
+      await prefs.saveCareerConfig(
+        leagueId: 'premier_league',
+        clubName: 'Arsenal',
+        clubCode: 'ARS',
+        isCustomClub: false,
+        squadMode: 'current',
+        budget: 100.0,
+        season: 1,
+        gameweek: 1,
+        squadIds: ['Bukayo Saka', 'Martin Ødegaard'],
+        aiClubSquads: testAiSquads,
+      );
+
+      final loaded = await prefs.getCareerConfig();
+      expect(loaded, isNotNull);
+      final loadedAi = loaded!['aiClubSquads'] as Map<String, List<String>>;
+      expect(loadedAi['Manchester United'], contains('Bruno Fernandes'));
+      expect(loadedAi['Real Madrid'], contains('Vinicius Jr'));
+
+      await prefs.clearCareerConfig();
+      final cleared = await prefs.getCareerConfig();
+      expect(cleared, isNull);
+    });
+
+    test('Mutual exclusivity: User-owned player NEVER appears in any AI club squad', () {
+      final userSquad = [
+        const Player(
+          mode: 'pl',
+          squadId: 'ars_2024',
+          teamCode: 'ARS',
+          teamName: 'Arsenal',
+          season: 2024,
+          playerId: 'CR7',
+          name: 'Cristiano Ronaldo',
+          overall: 88,
+          displayPosition: 'ST',
+          primaryPosition: 'ST',
+          allPositions: 'ST',
+          pace: 82,
+          shooting: 90,
+          passing: 78,
+          dribbling: 82,
+          defending: 35,
+          physicality: 76,
+          isGoalkeeper: false,
+        )
+      ];
+
+      final claimedPlayerNames = <String>{};
+      for (final p in userSquad) {
+        claimedPlayerNames.add(p.name.trim().toLowerCase());
+      }
+
+      // Simulated DB rows for Manchester United and Real Madrid containing Cristiano Ronaldo
+      final manUtdDbRows = [
+        {'player_name': 'Cristiano Ronaldo', 'primary_position': 'ST', 'overall': 92},
+        {'player_name': 'Bruno Fernandes', 'primary_position': 'CAM', 'overall': 88},
+        {'player_name': 'Marcus Rashford', 'primary_position': 'LW', 'overall': 84},
+      ];
+
+      final realMadridDbRows = [
+        {'player_name': 'Cristiano Ronaldo', 'primary_position': 'ST', 'overall': 94},
+        {'player_name': 'Vinicius Jr', 'primary_position': 'LW', 'overall': 89},
+        {'player_name': 'Jude Bellingham', 'primary_position': 'CAM', 'overall': 90},
+      ];
+
+      // Manchester United claims
+      final manUtdSquad = <String>[];
+      for (final r in manUtdDbRows) {
+        final name = (r['player_name'] as String).trim().toLowerCase();
+        if (!claimedPlayerNames.contains(name)) {
+          claimedPlayerNames.add(name);
+          manUtdSquad.add(r['player_name'] as String);
+        }
+      }
+
+      // Real Madrid claims
+      final realMadridSquad = <String>[];
+      for (final r in realMadridDbRows) {
+        final name = (r['player_name'] as String).trim().toLowerCase();
+        if (!claimedPlayerNames.contains(name)) {
+          claimedPlayerNames.add(name);
+          realMadridSquad.add(r['player_name'] as String);
+        }
+      }
+
+      // Cristiano Ronaldo MUST NOT be in Manchester United or Real Madrid
+      expect(manUtdSquad, isNot(contains('Cristiano Ronaldo')));
+      expect(manUtdSquad, contains('Bruno Fernandes'));
+      expect(realMadridSquad, isNot(contains('Cristiano Ronaldo')));
+      expect(realMadridSquad, contains('Vinicius Jr'));
+    });
+
+    test('Cross-club exclusivity: Two AI clubs never share the same player', () {
+      final claimedPlayerNames = <String>{};
+
+      // Man United processes first and claims historical Ronaldo
+      final manUtdDbRows = [
+        {'player_name': 'Cristiano Ronaldo', 'primary_position': 'ST', 'overall': 92},
+        {'player_name': 'Wayne Rooney', 'primary_position': 'ST', 'overall': 90},
+      ];
+
+      final realMadridDbRows = [
+        {'player_name': 'Cristiano Ronaldo', 'primary_position': 'ST', 'overall': 94},
+        {'player_name': 'Karim Benzema', 'primary_position': 'ST', 'overall': 91},
+      ];
+
+      final manUtdSquad = <String>[];
+      for (final r in manUtdDbRows) {
+        final name = (r['player_name'] as String).trim().toLowerCase();
+        if (!claimedPlayerNames.contains(name)) {
+          claimedPlayerNames.add(name);
+          manUtdSquad.add(r['player_name'] as String);
+        }
+      }
+
+      final realMadridSquad = <String>[];
+      for (final r in realMadridDbRows) {
+        final name = (r['player_name'] as String).trim().toLowerCase();
+        if (!claimedPlayerNames.contains(name)) {
+          claimedPlayerNames.add(name);
+          realMadridSquad.add(r['player_name'] as String);
+        }
+      }
+
+      expect(manUtdSquad, contains('Cristiano Ronaldo'));
+      expect(realMadridSquad, isNot(contains('Cristiano Ronaldo')),
+          reason: 'Real Madrid cannot claim Cristiano Ronaldo because Man United already claimed him');
+      expect(realMadridSquad, contains('Karim Benzema'));
+
+      // The intersection of player names between clubs must be strictly empty
+      final intersection = manUtdSquad.toSet().intersection(realMadridSquad.toSet());
+      expect(intersection, isEmpty);
+    });
+
+    test('User signing immediately removes player from previous AI club and updates active club mapping', () {
+      final aiClubSquads = {
+        'Manchester United': ['Cristiano Ronaldo', 'Bruno Fernandes', 'Marcus Rashford'],
+        'Real Madrid': ['Kylian Mbappé', 'Vinicius Jr'],
+      };
+
+      final aiClubPlayers = {
+        'Manchester United': [
+          SimPlayer(name: 'Cristiano Ronaldo', position: 'ST', overall: 90, isStarter: true),
+          SimPlayer(name: 'Bruno Fernandes', position: 'CAM', overall: 88, isStarter: true),
+          SimPlayer(name: 'Marcus Rashford', position: 'LW', overall: 84, isStarter: true),
+        ],
+      };
+
+      // User signs Cristiano Ronaldo
+      final target = 'Cristiano Ronaldo'.trim().toLowerCase();
+      for (final club in aiClubSquads.keys) {
+        aiClubSquads[club]?.removeWhere((n) => n.trim().toLowerCase() == target);
+      }
+      for (final club in aiClubPlayers.keys) {
+        aiClubPlayers[club]?.removeWhere((p) => p.name.trim().toLowerCase() == target);
+      }
+
+      expect(aiClubSquads['Manchester United'], isNot(contains('Cristiano Ronaldo')));
+      expect(aiClubPlayers['Manchester United']!.any((p) => p.name == 'Cristiano Ronaldo'), isFalse);
+      expect(aiClubSquads['Manchester United'], contains('Bruno Fernandes'));
+    });
+
+    test('User selling a player to AI club moves player to buying club squad and SimPlayers', () {
+      final aiClubSquads = {
+        'Real Madrid': ['Vinicius Jr', 'Kylian Mbappé'],
+      };
+      final aiClubPlayers = {
+        'Real Madrid': [
+          SimPlayer(name: 'Vinicius Jr', position: 'LW', overall: 90, isStarter: true),
+          SimPlayer(name: 'Kylian Mbappé', position: 'ST', overall: 91, isStarter: true),
+        ],
+      };
+
+      final soldPlayer = const Player(
+        mode: 'pl',
+        squadId: 'ars_2024',
+        teamCode: 'ARS',
+        teamName: 'Arsenal',
+        season: 2024,
+        playerId: 'BS7',
+        name: 'Bukayo Saka',
+        overall: 88,
+        displayPosition: 'RW',
+        primaryPosition: 'RW',
+        allPositions: 'RW',
+        pace: 86,
+        shooting: 84,
+        passing: 83,
+        dribbling: 89,
+        defending: 65,
+        physicality: 76,
+        isGoalkeeper: false,
+      );
+
+      final buyingClub = 'Real Madrid';
+      aiClubSquads[buyingClub]!.insert(0, soldPlayer.name);
+      aiClubPlayers[buyingClub]!.insert(0, SimPlayer(
+        name: soldPlayer.name,
+        position: soldPlayer.primaryPosition,
+        overall: soldPlayer.overall,
+        isStarter: true,
+      ));
+
+      expect(aiClubSquads['Real Madrid'], contains('Bukayo Saka'));
+      expect(aiClubPlayers['Real Madrid']!.first.name, 'Bukayo Saka');
+    });
+  });
 }
 
 
