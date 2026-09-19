@@ -1,4 +1,6 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import '../../core/services/sound_service.dart';
 import '../../core/theme/app_palette.dart';
 import '../../domain/models/player.dart';
 
@@ -13,6 +15,100 @@ class PitchSlot {
     required this.x,
     required this.y,
   });
+
+  PitchSlot copyWith({
+    String? defaultRole,
+    double? x,
+    double? y,
+  }) {
+    return PitchSlot(
+      defaultRole: defaultRole ?? this.defaultRole,
+      x: x ?? this.x,
+      y: y ?? this.y,
+    );
+  }
+
+  Map<String, dynamic> toJson() => {
+    'defaultRole': defaultRole,
+    'x': x,
+    'y': y,
+  };
+
+  factory PitchSlot.fromJson(Map<String, dynamic> json) => PitchSlot(
+    defaultRole: json['defaultRole'] as String? ?? 'CM',
+    x: (json['x'] as num?)?.toDouble() ?? 0.5,
+    y: (json['y'] as num?)?.toDouble() ?? 0.5,
+  );
+
+  /// Dynamically derives a tactical role badge from pitch coordinates
+  static String deriveTacticalRole(int slotIndex, double x, double y) {
+    if (slotIndex == 0) return 'GK';
+
+    // Attacking third (y <= 0.30)
+    if (y <= 0.30) {
+      if (x < 0.28) return 'LW';
+      if (x > 0.72) return 'RW';
+      if (y < 0.20) return 'ST';
+      return 'CF';
+    }
+
+    // Attacking midfield (0.30 < y <= 0.44)
+    if (y <= 0.44) {
+      if (x < 0.25) return 'LM';
+      if (x > 0.75) return 'RM';
+      if (x >= 0.38 && x <= 0.62) return 'CAM';
+      return 'AM';
+    }
+
+    // Central midfield (0.44 < y <= 0.58)
+    if (y <= 0.58) {
+      if (x < 0.22) return 'LM';
+      if (x > 0.78) return 'RM';
+      if (x < 0.40) return 'LCM';
+      if (x > 0.60) return 'RCM';
+      return 'CM';
+    }
+
+    // Defensive midfield (0.58 < y <= 0.68)
+    if (y <= 0.68) {
+      if (x < 0.22) return 'LWB';
+      if (x > 0.78) return 'RWB';
+      if (x < 0.40) return 'LDM';
+      if (x > 0.60) return 'RDM';
+      return 'CDM';
+    }
+
+    // Defensive line (y > 0.68)
+    if (x < 0.22) return 'LB';
+    if (x > 0.78) return 'RB';
+    if (x < 0.40) return 'LCB';
+    if (x > 0.60) return 'RCB';
+    return 'CB';
+  }
+
+  /// Clamps slot within safe pitch boundaries. GK stays in penalty box.
+  static PitchSlot clampSlot(int slotIndex, double x, double y) {
+    if (slotIndex == 0) {
+      // Goalkeeper: constrained to defending box
+      final clampedX = x.clamp(0.35, 0.65);
+      final clampedY = y.clamp(0.78, 0.94);
+      return PitchSlot(
+        defaultRole: 'GK',
+        x: double.parse(clampedX.toStringAsFixed(3)),
+        y: double.parse(clampedY.toStringAsFixed(3)),
+      );
+    } else {
+      // Outfield player: tactical pitch bounds
+      final clampedX = x.clamp(0.08, 0.92);
+      final clampedY = y.clamp(0.08, 0.88);
+      final role = deriveTacticalRole(slotIndex, clampedX, clampedY);
+      return PitchSlot(
+        defaultRole: role,
+        x: double.parse(clampedX.toStringAsFixed(3)),
+        y: double.parse(clampedY.toStringAsFixed(3)),
+      );
+    }
+  }
 }
 
 /// Tactical formation definition
@@ -26,6 +122,17 @@ class TacticalFormation {
     required this.displayName,
     required this.slots,
   });
+
+  bool isCustomized(List<PitchSlot> currentSlots) {
+    if (currentSlots.length != slots.length) return true;
+    for (int i = 0; i < slots.length; i++) {
+      if ((slots[i].x - currentSlots[i].x).abs() > 0.015 ||
+          (slots[i].y - currentSlots[i].y).abs() > 0.015) {
+        return true;
+      }
+    }
+    return false;
+  }
 
   static const List<TacticalFormation> presets = [
     // 4-3-3 (Default)
@@ -166,6 +273,10 @@ class TacticalFormation {
 
 /// Custom painter for authentic football pitch with stripes, markings and grass gradient
 class PitchPainter extends CustomPainter {
+  final PitchSlot? activeGuideSlot;
+
+  const PitchPainter({this.activeGuideSlot});
+
   @override
   void paint(Canvas canvas, Size size) {
     final w = size.width;
@@ -226,22 +337,68 @@ class PitchPainter extends CustomPainter {
     // Penalty spots
     canvas.drawCircle(Offset(w / 2, inset + boxH * 0.65), 2.0, spotPaint);
     canvas.drawCircle(Offset(w / 2, h - inset - boxH * 0.65), 2.0, spotPaint);
+
+    // Tactical crosshair guide lines when actively dragging a slot in Freeform Mode
+    if (activeGuideSlot != null) {
+      final guideX = (activeGuideSlot!.x * w).clamp(inset, w - inset);
+      final guideY = (activeGuideSlot!.y * h).clamp(inset, h - inset);
+
+      final guidePaint = Paint()
+        ..color = AppPalette.gold.withValues(alpha: 0.50)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.0;
+
+      // Dashed horizontal guide
+      const dashW = 6.0;
+      const dashSpace = 4.0;
+      double startX = inset;
+      while (startX < w - inset) {
+        canvas.drawLine(
+          Offset(startX, guideY),
+          Offset(math.min(startX + dashW, w - inset), guideY),
+          guidePaint,
+        );
+        startX += dashW + dashSpace;
+      }
+
+      // Dashed vertical guide
+      double startY = inset;
+      while (startY < h - inset) {
+        canvas.drawLine(
+          Offset(guideX, startY),
+          Offset(guideX, math.min(startY + dashW, h - inset)),
+          guidePaint,
+        );
+        startY += dashW + dashSpace;
+      }
+
+      // Reticle ring
+      final reticlePaint = Paint()
+        ..color = AppPalette.gold.withValues(alpha: 0.70)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5;
+      canvas.drawCircle(Offset(guideX, guideY), 16.0, reticlePaint);
+    }
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant PitchPainter oldDelegate) {
+    return oldDelegate.activeGuideSlot != activeGuideSlot;
+  }
 }
 
 /// Interactive FIFA-Style Pitch Lineup & Formation Editor Sheet
 class FormationEditorSheet extends StatefulWidget {
   final List<Player> squad;
   final String currentFormationId;
-  final Function(String newFormationId, List<Player> updatedSquad) onSave;
+  final List<PitchSlot>? initialCustomSlots;
+  final Function(String newFormationId, List<Player> updatedSquad, [List<PitchSlot>? customSlots]) onSave;
 
   const FormationEditorSheet({
     super.key,
     required this.squad,
     required this.currentFormationId,
+    this.initialCustomSlots,
     required this.onSave,
   });
 
@@ -252,51 +409,121 @@ class FormationEditorSheet extends StatefulWidget {
 class _FormationEditorSheetState extends State<FormationEditorSheet> {
   late String _formationId;
   late List<Player> _squad;
-  int? _selectedPlayerIndex; // Index in _squad currently selected for swapping
+  late List<PitchSlot> _currentSlots;
+  int? _selectedPlayerIndex; // Index in _squad currently selected for tap-to-swap
+  int? _draggingSlotIndex; // Slot index being moved across the pitch in Freeform mode
+  int _editorMode = 0; // 0: LINEUP & SWAPS, 1: FREEFORM PITCH
 
   @override
   void initState() {
     super.initState();
     _formationId = widget.currentFormationId;
     _squad = List<Player>.from(widget.squad);
+
+    final defaultFormation = TacticalFormation.getById(_formationId);
+    if (widget.initialCustomSlots != null && widget.initialCustomSlots!.length == 11) {
+      _currentSlots = List<PitchSlot>.from(widget.initialCustomSlots!);
+    } else {
+      _currentSlots = List<PitchSlot>.from(defaultFormation.slots);
+    }
+  }
+
+  bool _canSwap(int indexA, int indexB) {
+    if (indexA == indexB) return false;
+    if (indexA < 0 || indexA >= _squad.length || indexB < 0 || indexB >= _squad.length) return false;
+    final pA = _squad[indexA];
+    final pB = _squad[indexB];
+    final isGkA = pA.isGoalkeeper || pA.primaryPosition == 'GK';
+    final isGkB = pB.isGoalkeeper || pB.primaryPosition == 'GK';
+    return isGkA == isGkB;
+  }
+
+  void _executeSwap(int indexA, int indexB) {
+    if (!_canSwap(indexA, indexB)) {
+      SoundService.instance.playWrong();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: AppPalette.red,
+          content: Text(
+            'Invalid Swap: Goalkeepers cannot be swapped with outfield players.',
+            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+          ),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      setState(() {
+        _selectedPlayerIndex = null;
+      });
+      return;
+    }
+
+    SoundService.instance.playClick();
+    setState(() {
+      final temp = _squad[indexA];
+      _squad[indexA] = _squad[indexB];
+      _squad[indexB] = temp;
+      _selectedPlayerIndex = null;
+      widget.onSave(_formationId, _squad, _currentSlots);
+    });
   }
 
   void _handlePlayerTap(int index) {
+    if (_editorMode == 1) {
+      // In Freeform mode, tapping selects node for visual feedback
+      setState(() {
+        _selectedPlayerIndex = (_selectedPlayerIndex == index) ? null : index;
+      });
+      SoundService.instance.playClick();
+      return;
+    }
+
+    // In Swap mode: standard tap-to-swap
     setState(() {
       if (_selectedPlayerIndex == null) {
         // Select this player
         _selectedPlayerIndex = index;
+        SoundService.instance.playClick();
       } else if (_selectedPlayerIndex == index) {
         // Deselect
         _selectedPlayerIndex = null;
+        SoundService.instance.playClick();
       } else {
         // SWAP players!
-        final pA = _squad[_selectedPlayerIndex!];
-        final pB = _squad[index];
-        final isGkA = pA.isGoalkeeper || pA.primaryPosition == 'GK';
-        final isGkB = pB.isGoalkeeper || pB.primaryPosition == 'GK';
-
-        if (isGkA != isGkB) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              backgroundColor: AppPalette.red,
-              content: Text(
-                'Invalid Swap: Goalkeepers cannot be swapped with outfield players.',
-                style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
-              ),
-              duration: Duration(seconds: 2),
-            ),
-          );
-          _selectedPlayerIndex = null;
-          return;
-        }
-
-        final temp = _squad[_selectedPlayerIndex!];
-        _squad[_selectedPlayerIndex!] = _squad[index];
-        _squad[index] = temp;
-        _selectedPlayerIndex = null;
-        widget.onSave(_formationId, _squad);
+        _executeSwap(_selectedPlayerIndex!, index);
       }
+    });
+  }
+
+  void _resetSlotsToPreset() {
+    SoundService.instance.playClick();
+    setState(() {
+      final preset = TacticalFormation.getById(_formationId);
+      _currentSlots = List<PitchSlot>.from(preset.slots);
+      _selectedPlayerIndex = null;
+      _draggingSlotIndex = null;
+      widget.onSave(_formationId, _squad, _currentSlots);
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: const Color(0xFF132330),
+        content: Text(
+          'Positions reset to canonical ${TacticalFormation.getById(_formationId).displayName}',
+          style: const TextStyle(color: AppPalette.gold, fontWeight: FontWeight.bold),
+        ),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  void _changeFormation(String newId) {
+    SoundService.instance.playClick();
+    setState(() {
+      _formationId = newId;
+      final preset = TacticalFormation.getById(newId);
+      _currentSlots = List<PitchSlot>.from(preset.slots);
+      _selectedPlayerIndex = null;
+      _draggingSlotIndex = null;
+      widget.onSave(_formationId, _squad, _currentSlots);
     });
   }
 
@@ -310,6 +537,7 @@ class _FormationEditorSheetState extends State<FormationEditorSheet> {
   @override
   Widget build(BuildContext context) {
     final formation = TacticalFormation.getById(_formationId);
+    final isCustomized = formation.isCustomized(_currentSlots);
     final starters = _squad.take(11).toList();
     final bench = _squad.skip(11).toList();
     final avgStarterOvr = starters.isNotEmpty
@@ -317,17 +545,17 @@ class _FormationEditorSheetState extends State<FormationEditorSheet> {
         : 80;
 
     return Container(
-      height: MediaQuery.of(context).size.height * 0.90,
+      height: MediaQuery.of(context).size.height * 0.92,
       decoration: const BoxDecoration(
         color: Color(0xFF0B141B),
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       child: Column(
         children: [
-          // Header handle
+          // Header drag handle
           Center(
             child: Container(
-              margin: const EdgeInsets.only(top: 10, bottom: 8),
+              margin: const EdgeInsets.only(top: 10, bottom: 6),
               width: 44,
               height: 4,
               decoration: BoxDecoration(
@@ -339,7 +567,7 @@ class _FormationEditorSheetState extends State<FormationEditorSheet> {
 
           // Title & Formation Selector Bar
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
             child: Row(
               children: [
                 Expanded(
@@ -358,15 +586,44 @@ class _FormationEditorSheetState extends State<FormationEditorSheet> {
                       const SizedBox(height: 2),
                       Row(
                         children: [
-                          Text(
-                            formation.displayName,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
+                          Flexible(
+                            child: Text(
+                              formation.displayName,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
                           const SizedBox(width: 8),
+                          if (isCustomized) ...[
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: AppPalette.gold.withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: AppPalette.gold.withValues(alpha: 0.6)),
+                              ),
+                              child: const Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(Icons.auto_awesome, color: AppPalette.gold, size: 10),
+                                  SizedBox(width: 3),
+                                  Text(
+                                    'CUSTOM',
+                                    style: TextStyle(
+                                      color: AppPalette.gold,
+                                      fontSize: 9.5,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                          ],
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                             decoration: BoxDecoration(
@@ -392,12 +649,7 @@ class _FormationEditorSheetState extends State<FormationEditorSheet> {
                 PopupMenuButton<String>(
                   initialValue: _formationId,
                   tooltip: 'Change Formation',
-                  onSelected: (val) {
-                    setState(() {
-                      _formationId = val;
-                      widget.onSave(_formationId, _squad);
-                    });
-                  },
+                  onSelected: _changeFormation,
                   color: const Color(0xFF132330),
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   itemBuilder: (context) {
@@ -435,10 +687,10 @@ class _FormationEditorSheetState extends State<FormationEditorSheet> {
                     child: const Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(Icons.tune, color: AppPalette.gold, size: 16),
-                        SizedBox(width: 6),
+                        Icon(Icons.tune, color: AppPalette.gold, size: 15),
+                        SizedBox(width: 5),
                         Text(
-                          'CHANGE',
+                          'PRESETS',
                           style: TextStyle(
                             color: AppPalette.gold,
                             fontSize: 11,
@@ -453,45 +705,112 @@ class _FormationEditorSheetState extends State<FormationEditorSheet> {
             ),
           ),
 
-          // Instructions hint
+          const SizedBox(height: 6),
+
+          // Interactive Mode Selector Bar
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Container(
+              padding: const EdgeInsets.all(3),
+              decoration: BoxDecoration(
+                color: const Color(0xFF101B24),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.white10),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: _buildModeTab(
+                      index: 0,
+                      label: 'LINEUP & SWAPS',
+                      icon: Icons.swap_horiz_rounded,
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Expanded(
+                    child: _buildModeTab(
+                      index: 1,
+                      label: 'FREEFORM PITCH',
+                      icon: Icons.open_with_rounded,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // Contextual Instructions & Reset Action
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
             child: Row(
               children: [
                 Icon(
-                  _selectedPlayerIndex != null ? Icons.swap_horiz : Icons.touch_app,
-                  size: 14,
-                  color: _selectedPlayerIndex != null ? const Color(0xFFFFD700) : Colors.white38,
+                  _editorMode == 1
+                      ? Icons.control_camera_rounded
+                      : (_selectedPlayerIndex != null ? Icons.touch_app : Icons.pan_tool_alt_rounded),
+                  size: 13,
+                  color: (_editorMode == 1 || _selectedPlayerIndex != null)
+                      ? AppPalette.gold
+                      : Colors.white38,
                 ),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
-                    _selectedPlayerIndex != null
-                        ? 'Tap any other player on the pitch or bench to SWAP'
-                        : 'Tap a starter or bench player to swap positions freely',
+                    _editorMode == 1
+                        ? 'Drag any starter node to customize spacing & tactical roles'
+                        : (_selectedPlayerIndex != null
+                            ? 'Tap another player or drag card to SWAP'
+                            : 'Tap or drag players between pitch & bench to swap starters'),
                     style: TextStyle(
-                      color: _selectedPlayerIndex != null ? const Color(0xFFFFD700) : Colors.white54,
-                      fontSize: 11,
-                      fontWeight: _selectedPlayerIndex != null ? FontWeight.bold : FontWeight.normal,
+                      color: (_editorMode == 1 || _selectedPlayerIndex != null)
+                          ? AppPalette.gold
+                          : Colors.white54,
+                      fontSize: 10.5,
+                      fontWeight: (_editorMode == 1 || _selectedPlayerIndex != null)
+                          ? FontWeight.w700
+                          : FontWeight.normal,
                     ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
                 ),
-                if (_selectedPlayerIndex != null)
+                if (_editorMode == 0 && _selectedPlayerIndex != null)
                   TextButton(
                     onPressed: () => setState(() => _selectedPlayerIndex = null),
                     style: TextButton.styleFrom(
-                      padding: EdgeInsets.zero,
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
                       minimumSize: const Size(40, 20),
                     ),
                     child: const Text('CANCEL', style: TextStyle(color: Colors.white70, fontSize: 10)),
+                  )
+                else if (isCustomized)
+                  InkWell(
+                    onTap: _resetSlotsToPreset,
+                    borderRadius: BorderRadius.circular(6),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: Colors.white10,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.restore, size: 12, color: Colors.white70),
+                          SizedBox(width: 3),
+                          Text(
+                            'RESET',
+                            style: TextStyle(color: Colors.white70, fontSize: 9.5, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
               ],
             ),
           ),
 
-          const SizedBox(height: 4),
-
-          // THE VISUAL PITCH
+          // THE TACTICAL PITCH
           Expanded(
             flex: 6,
             child: Padding(
@@ -500,17 +819,20 @@ class _FormationEditorSheetState extends State<FormationEditorSheet> {
                 builder: (context, constraints) {
                   final pitchWidth = constraints.maxWidth;
                   final pitchHeight = constraints.maxHeight;
+                  final guideSlot = (_draggingSlotIndex != null && _draggingSlotIndex! < _currentSlots.length)
+                      ? _currentSlots[_draggingSlotIndex!]
+                      : null;
 
                   return ClipRRect(
                     borderRadius: BorderRadius.circular(16),
                     child: CustomPaint(
-                      painter: PitchPainter(),
+                      painter: PitchPainter(activeGuideSlot: guideSlot),
                       child: Stack(
                         children: [
                           // Render the 11 starter slots
-                          for (int i = 0; i < 11 && i < formation.slots.length && i < starters.length; i++)
+                          for (int i = 0; i < 11 && i < _currentSlots.length && i < starters.length; i++)
                             _buildPitchPlayer(
-                              slot: formation.slots[i],
+                              slot: _currentSlots[i],
                               player: starters[i],
                               index: i,
                               pitchWidth: pitchWidth,
@@ -526,7 +848,7 @@ class _FormationEditorSheetState extends State<FormationEditorSheet> {
           ),
 
           // BENCH RESERVES TITLE & LIST
-          const SizedBox(height: 8),
+          const SizedBox(height: 6),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
             child: Row(
@@ -545,6 +867,12 @@ class _FormationEditorSheetState extends State<FormationEditorSheet> {
                   '(${bench.length} reserves)',
                   style: const TextStyle(color: Colors.white38, fontSize: 10),
                 ),
+                const Spacer(),
+                if (_editorMode == 0)
+                  const Text(
+                    'Hold card to drag into lineup',
+                    style: TextStyle(color: Colors.white30, fontSize: 9.5, fontStyle: FontStyle.italic),
+                  ),
               ],
             ),
           ),
@@ -552,8 +880,8 @@ class _FormationEditorSheetState extends State<FormationEditorSheet> {
           Expanded(
             flex: 2,
             child: Container(
-              margin: const EdgeInsets.fromLTRB(14, 0, 14, 12),
-              padding: const EdgeInsets.symmetric(vertical: 4),
+              margin: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+              padding: const EdgeInsets.symmetric(vertical: 2),
               decoration: BoxDecoration(
                 color: const Color(0xFF101B24),
                 borderRadius: BorderRadius.circular(14),
@@ -563,78 +891,87 @@ class _FormationEditorSheetState extends State<FormationEditorSheet> {
                 scrollDirection: Axis.horizontal,
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 itemCount: bench.length,
-                itemBuilder: (context, bIdx) {
-                  final playerIdx = 11 + bIdx;
-                  final player = bench[bIdx];
-                  final isSelected = _selectedPlayerIndex == playerIdx;
+                itemBuilder: (context, bIdx) => _buildBenchItem(bIdx, bench),
+              ),
+            ),
+          ),
 
-                  return GestureDetector(
-                    onTap: () => _handlePlayerTap(playerIdx),
-                    child: Container(
-                      width: 80,
-                      margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-                      padding: const EdgeInsets.all(6),
-                      decoration: BoxDecoration(
-                        color: isSelected ? AppPalette.gold.withValues(alpha: 0.25) : const Color(0xFF162633),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(
-                          color: isSelected ? AppPalette.gold : Colors.white10,
-                          width: isSelected ? 2 : 1,
-                        ),
-                      ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                                decoration: BoxDecoration(
-                                  color: Colors.black45,
-                                  borderRadius: BorderRadius.circular(4),
-                                ),
-                                child: Text(
-                                  player.primaryPosition,
-                                  style: const TextStyle(
-                                    color: Colors.white70,
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                '${player.overall}',
-                                style: TextStyle(
-                                  color: _getOvrColor(player.overall),
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            _shortenName(player.name),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
+          // Bottom Confirmation Button
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            child: SizedBox(
+              width: double.infinity,
+              height: 42,
+              child: FilledButton.icon(
+                style: FilledButton.styleFrom(
+                  backgroundColor: AppPalette.gold,
+                  foregroundColor: Colors.black,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: () {
+                  SoundService.instance.playClick();
+                  widget.onSave(_formationId, _squad, _currentSlots);
+                  Navigator.pop(context);
                 },
+                icon: const Icon(Icons.check_circle_outline_rounded, size: 18),
+                label: Text(
+                  isCustomized ? 'SAVE CUSTOM TACTICS' : 'CONFIRM LINEUP',
+                  style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13, letterSpacing: 0.5),
+                ),
               ),
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildModeTab({
+    required int index,
+    required String label,
+    required IconData icon,
+  }) {
+    final isActive = _editorMode == index;
+    return GestureDetector(
+      onTap: () {
+        SoundService.instance.playClick();
+        setState(() {
+          _editorMode = index;
+          _selectedPlayerIndex = null;
+          _draggingSlotIndex = null;
+        });
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        decoration: BoxDecoration(
+          color: isActive ? AppPalette.gold.withValues(alpha: 0.18) : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: isActive ? AppPalette.gold.withValues(alpha: 0.6) : Colors.transparent,
+            width: 1.2,
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: 13,
+              color: isActive ? AppPalette.gold : Colors.white54,
+            ),
+            const SizedBox(width: 5),
+            Text(
+              label,
+              style: TextStyle(
+                color: isActive ? AppPalette.gold : Colors.white60,
+                fontSize: 10.5,
+                fontWeight: isActive ? FontWeight.w800 : FontWeight.w600,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -647,52 +984,199 @@ class _FormationEditorSheetState extends State<FormationEditorSheet> {
     required double pitchHeight,
   }) {
     final isSelected = _selectedPlayerIndex == index;
-    final cardW = 64.0;
-    final cardH = 54.0;
+    final isActivelyDragged = _draggingSlotIndex == index;
+    const cardW = 66.0;
+    const cardH = 56.0;
 
     final posX = (slot.x * pitchWidth) - (cardW / 2);
     final posY = (slot.y * pitchHeight) - (cardH / 2);
 
-    return Positioned(
-      left: posX.clamp(4.0, pitchWidth - cardW - 4.0),
-      top: posY.clamp(4.0, pitchHeight - cardH - 4.0),
-      child: GestureDetector(
-        onTap: () => _handlePlayerTap(index),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 200),
-          width: cardW,
-          height: cardH,
-          decoration: BoxDecoration(
-            color: isSelected ? const Color(0xFF0F3B5C) : const Color(0xFF0C1923).withValues(alpha: 0.92),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-              color: isSelected
-                  ? const Color(0xFFFFD700)
-                  : Colors.white.withValues(alpha: 0.25),
-              width: isSelected ? 2.2 : 1.2,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: isSelected ? const Color(0xFFFFD700).withValues(alpha: 0.4) : Colors.black45,
-                blurRadius: isSelected ? 8 : 4,
-                offset: const Offset(0, 2),
-              ),
-            ],
+    if (_editorMode == 1) {
+      // FREEFORM TACTICAL DRAG MODE
+      return Positioned(
+        left: posX.clamp(4.0, pitchWidth - cardW - 4.0),
+        top: posY.clamp(4.0, pitchHeight - cardH - 4.0),
+        child: GestureDetector(
+          onPanStart: (details) {
+            setState(() {
+              _draggingSlotIndex = index;
+            });
+            SoundService.instance.lightHaptic();
+          },
+          onPanUpdate: (details) {
+            setState(() {
+              final dx = details.delta.dx / pitchWidth;
+              final dy = details.delta.dy / pitchHeight;
+              final cur = _currentSlots[index];
+              _currentSlots[index] = PitchSlot.clampSlot(index, cur.x + dx, cur.y + dy);
+            });
+          },
+          onPanEnd: (_) {
+            setState(() {
+              _draggingSlotIndex = null;
+            });
+            SoundService.instance.playClick();
+            widget.onSave(_formationId, _squad, _currentSlots);
+          },
+          onPanCancel: () {
+            setState(() {
+              _draggingSlotIndex = null;
+            });
+          },
+          child: _buildNodeCard(
+            player: player,
+            slot: slot,
+            isSelected: isSelected,
+            isDragging: isActivelyDragged,
+            showCoords: isActivelyDragged,
+            cardW: cardW,
+            cardH: cardH,
           ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
+        ),
+      );
+    } else {
+      // SWAP MODE (Drag-to-Swap and Tap-to-Swap)
+      return Positioned(
+        left: posX.clamp(4.0, pitchWidth - cardW - 4.0),
+        top: posY.clamp(4.0, pitchHeight - cardH - 4.0),
+        child: DragTarget<int>(
+          onWillAcceptWithDetails: (details) => details.data != index,
+          onAcceptWithDetails: (details) {
+            _executeSwap(details.data, index);
+          },
+          builder: (context, candidateData, rejectedData) {
+            final draggedCandidate = candidateData.whereType<int>().firstOrNull;
+            final isTargeted = draggedCandidate != null;
+            final canAccept = isTargeted && _canSwap(draggedCandidate, index);
+
+            return LongPressDraggable<int>(
+              data: index,
+              delay: const Duration(milliseconds: 140),
+              onDragStarted: () => SoundService.instance.lightHaptic(),
+              feedback: Material(
+                color: Colors.transparent,
+                child: _buildNodeCard(
+                  player: player,
+                  slot: slot,
+                  isSelected: true,
+                  isFloating: true,
+                  cardW: cardW,
+                  cardH: cardH,
+                ),
+              ),
+              childWhenDragging: Opacity(
+                opacity: 0.35,
+                child: _buildNodeCard(
+                  player: player,
+                  slot: slot,
+                  isSelected: false,
+                  cardW: cardW,
+                  cardH: cardH,
+                ),
+              ),
+              child: GestureDetector(
+                onTap: () => _handlePlayerTap(index),
+                child: _buildNodeCard(
+                  player: player,
+                  slot: slot,
+                  isSelected: isSelected,
+                  isDropTarget: isTargeted,
+                  isDropValid: canAccept,
+                  cardW: cardW,
+                  cardH: cardH,
+                ),
+              ),
+            );
+          },
+        ),
+      );
+    }
+  }
+
+  Widget _buildNodeCard({
+    required Player player,
+    required PitchSlot slot,
+    bool isSelected = false,
+    bool isDragging = false,
+    bool isFloating = false,
+    bool isDropTarget = false,
+    bool isDropValid = true,
+    bool showCoords = false,
+    required double cardW,
+    required double cardH,
+  }) {
+    Color borderColor = Colors.white.withValues(alpha: 0.25);
+    double borderWidth = 1.2;
+    Color bgColor = const Color(0xFF0C1923).withValues(alpha: 0.92);
+
+    if (isDropTarget) {
+      if (isDropValid) {
+        borderColor = const Color(0xFF00E5FF);
+        borderWidth = 2.4;
+        bgColor = const Color(0xFF00384D);
+      } else {
+        borderColor = AppPalette.red;
+        borderWidth = 2.4;
+        bgColor = const Color(0xFF4A1010);
+      }
+    } else if (isDragging || isSelected || isFloating) {
+      borderColor = const Color(0xFFFFD700);
+      borderWidth = 2.2;
+      bgColor = const Color(0xFF0F3B5C);
+    }
+
+    return AnimatedScale(
+      scale: (isDragging || isFloating) ? 1.10 : (isDropTarget ? 1.05 : 1.0),
+      duration: const Duration(milliseconds: 150),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        width: cardW,
+        height: cardH,
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: borderColor, width: borderWidth),
+          boxShadow: [
+            BoxShadow(
+              color: (isDragging || isSelected || isFloating)
+                  ? const Color(0xFFFFD700).withValues(alpha: 0.45)
+                  : (isDropTarget
+                      ? (isDropValid
+                          ? const Color(0xFF00E5FF).withValues(alpha: 0.45)
+                          : AppPalette.red.withValues(alpha: 0.45))
+                      : Colors.black45),
+              blurRadius: (isDragging || isFloating || isDropTarget) ? 10 : (isSelected ? 8 : 4),
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (isDropTarget)
+              Text(
+                isDropValid ? 'SWAP' : 'NO GK',
+                style: TextStyle(
+                  color: isDropValid ? const Color(0xFF00E5FF) : AppPalette.red,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.8,
+                ),
+              )
+            else ...[
               Row(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+                    padding: const EdgeInsets.symmetric(horizontal: 3.5, vertical: 1),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF1E3A4C),
+                      color: slot.defaultRole == 'GK'
+                          ? const Color(0xFF7A4E00)
+                          : const Color(0xFF1E3A4C),
                       borderRadius: BorderRadius.circular(3),
                     ),
                     child: Text(
-                      player.primaryPosition,
+                      slot.defaultRole,
                       style: const TextStyle(
                         color: Colors.white,
                         fontSize: 8.5,
@@ -726,8 +1210,182 @@ class _FormationEditorSheetState extends State<FormationEditorSheet> {
                   ),
                 ),
               ),
+              if (showCoords)
+                Text(
+                  '${(slot.x * 100).round()}% • ${(slot.y * 100).round()}%',
+                  style: const TextStyle(
+                    color: AppPalette.gold,
+                    fontSize: 7.5,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
             ],
-          ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildBenchItem(int bIdx, List<Player> bench) {
+    final playerIdx = 11 + bIdx;
+    final player = bench[bIdx];
+    final isSelected = _selectedPlayerIndex == playerIdx;
+
+    if (_editorMode == 0) {
+      // SWAP MODE: bench item is both DragTarget and LongPressDraggable!
+      return DragTarget<int>(
+        onWillAcceptWithDetails: (details) => details.data != playerIdx,
+        onAcceptWithDetails: (details) {
+          _executeSwap(details.data, playerIdx);
+        },
+        builder: (context, candidateData, rejectedData) {
+          final draggedCandidate = candidateData.whereType<int>().firstOrNull;
+          final isTargeted = draggedCandidate != null;
+          final canAccept = isTargeted && _canSwap(draggedCandidate, playerIdx);
+
+          return LongPressDraggable<int>(
+            data: playerIdx,
+            delay: const Duration(milliseconds: 180),
+            onDragStarted: () => SoundService.instance.lightHaptic(),
+            feedback: Material(
+              color: Colors.transparent,
+              child: _buildBenchCard(
+                player: player,
+                isSelected: true,
+                isFloating: true,
+              ),
+            ),
+            childWhenDragging: Opacity(
+              opacity: 0.35,
+              child: _buildBenchCard(player: player, isSelected: false),
+            ),
+            child: GestureDetector(
+              onTap: () => _handlePlayerTap(playerIdx),
+              child: _buildBenchCard(
+                player: player,
+                isSelected: isSelected,
+                isDropTarget: isTargeted,
+                isDropValid: canAccept,
+              ),
+            ),
+          );
+        },
+      );
+    } else {
+      // FREEFORM MODE: bench player is tap-only
+      return GestureDetector(
+        onTap: () => _handlePlayerTap(playerIdx),
+        child: _buildBenchCard(player: player, isSelected: isSelected),
+      );
+    }
+  }
+
+  Widget _buildBenchCard({
+    required Player player,
+    bool isSelected = false,
+    bool isFloating = false,
+    bool isDropTarget = false,
+    bool isDropValid = true,
+  }) {
+    Color borderColor = Colors.white10;
+    double borderWidth = 1.0;
+    Color bgColor = const Color(0xFF162633);
+
+    if (isDropTarget) {
+      if (isDropValid) {
+        borderColor = const Color(0xFF00E5FF);
+        borderWidth = 2.0;
+        bgColor = const Color(0xFF00384D);
+      } else {
+        borderColor = AppPalette.red;
+        borderWidth = 2.0;
+        bgColor = const Color(0xFF4A1010);
+      }
+    } else if (isSelected || isFloating) {
+      borderColor = AppPalette.gold;
+      borderWidth = 2.0;
+      bgColor = AppPalette.gold.withValues(alpha: 0.25);
+    }
+
+    return AnimatedScale(
+      scale: isFloating ? 1.08 : (isDropTarget ? 1.05 : 1.0),
+      duration: const Duration(milliseconds: 150),
+      child: Container(
+        width: 82,
+        margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+        padding: const EdgeInsets.all(6),
+        decoration: BoxDecoration(
+          color: bgColor,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: borderColor, width: borderWidth),
+          boxShadow: isFloating
+              ? [
+                  BoxShadow(
+                    color: AppPalette.gold.withValues(alpha: 0.4),
+                    blurRadius: 10,
+                    offset: const Offset(0, 2),
+                  ),
+                ]
+              : null,
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (isDropTarget)
+              Text(
+                isDropValid ? 'SUB' : 'NO GK',
+                style: TextStyle(
+                  color: isDropValid ? const Color(0xFF00E5FF) : AppPalette.red,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w900,
+                ),
+              )
+            else ...[
+              Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: (player.isGoalkeeper || player.primaryPosition == 'GK')
+                          ? const Color(0xFF7A4E00)
+                          : Colors.black45,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      player.primaryPosition,
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    '${player.overall}',
+                    style: TextStyle(
+                      color: _getOvrColor(player.overall),
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _shortenName(player.name),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ],
         ),
       ),
     );

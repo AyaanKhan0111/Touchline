@@ -16,7 +16,6 @@ import 'package:touchline/domain/services/squad_event_service.dart';
 import 'package:touchline/domain/services/transfer_market_service.dart';
 import 'package:touchline/features/career/career_screen.dart';
 import 'package:touchline/features/career/formation_editor.dart';
-import 'package:touchline/features/career/transfer_market_sheet.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -1509,6 +1508,84 @@ void main() {
     test('TacticalFormation.getById falls back safely to 4-3-3 for unknown identifiers', () {
       final fallback = TacticalFormation.getById('non_existent_formation');
       expect(fallback.id, '4-3-3');
+    });
+
+    test('PitchSlot.clampSlot respects pitch boundaries and restricts Goalkeeper to defending box (Fix 31)', () {
+      // Outfield player dragged out of bounds
+      final clampedOutfieldLow = PitchSlot.clampSlot(1, -0.2, -0.5);
+      expect(clampedOutfieldLow.x, closeTo(0.08, 0.001));
+      expect(clampedOutfieldLow.y, closeTo(0.08, 0.001));
+
+      final clampedOutfieldHigh = PitchSlot.clampSlot(5, 1.5, 1.2);
+      expect(clampedOutfieldHigh.x, closeTo(0.92, 0.001));
+      expect(clampedOutfieldHigh.y, closeTo(0.88, 0.001));
+
+      // Goalkeeper (slot 0) strictly restricted to defending penalty box
+      final clampedGkFarLeft = PitchSlot.clampSlot(0, 0.1, 0.5);
+      expect(clampedGkFarLeft.defaultRole, 'GK');
+      expect(clampedGkFarLeft.x, closeTo(0.35, 0.001));
+      expect(clampedGkFarLeft.y, closeTo(0.78, 0.001));
+
+      final clampedGkFarRight = PitchSlot.clampSlot(0, 0.9, 0.99);
+      expect(clampedGkFarRight.defaultRole, 'GK');
+      expect(clampedGkFarRight.x, closeTo(0.65, 0.001));
+      expect(clampedGkFarRight.y, closeTo(0.94, 0.001));
+    });
+
+    test('PitchSlot.deriveTacticalRole dynamically deduces realistic tactical positions (Fix 31)', () {
+      // Goalkeeper
+      expect(PitchSlot.deriveTacticalRole(0, 0.50, 0.90), 'GK');
+
+      // Attacking third
+      expect(PitchSlot.deriveTacticalRole(10, 0.50, 0.15), 'ST');
+      expect(PitchSlot.deriveTacticalRole(9, 0.15, 0.20), 'LW');
+      expect(PitchSlot.deriveTacticalRole(11, 0.85, 0.20), 'RW');
+      expect(PitchSlot.deriveTacticalRole(8, 0.50, 0.28), 'CF');
+
+      // Midfield
+      expect(PitchSlot.deriveTacticalRole(7, 0.50, 0.38), 'CAM');
+      expect(PitchSlot.deriveTacticalRole(6, 0.18, 0.40), 'LM');
+      expect(PitchSlot.deriveTacticalRole(5, 0.82, 0.40), 'RM');
+      expect(PitchSlot.deriveTacticalRole(4, 0.30, 0.52), 'LCM');
+      expect(PitchSlot.deriveTacticalRole(3, 0.70, 0.52), 'RCM');
+      expect(PitchSlot.deriveTacticalRole(2, 0.50, 0.52), 'CM');
+
+      // Defensive midfield & backline
+      expect(PitchSlot.deriveTacticalRole(6, 0.50, 0.62), 'CDM');
+      expect(PitchSlot.deriveTacticalRole(2, 0.15, 0.72), 'LB');
+      expect(PitchSlot.deriveTacticalRole(5, 0.85, 0.72), 'RB');
+      expect(PitchSlot.deriveTacticalRole(3, 0.38, 0.75), 'LCB');
+      expect(PitchSlot.deriveTacticalRole(4, 0.62, 0.75), 'RCB');
+    });
+
+    test('PitchSlot serialization and copyWith works seamlessly (Fix 31)', () {
+      const slot = PitchSlot(defaultRole: 'CAM', x: 0.50, y: 0.40);
+      final copy = slot.copyWith(y: 0.35);
+      expect(copy.defaultRole, 'CAM');
+      expect(copy.x, 0.50);
+      expect(copy.y, 0.35);
+
+      final json = copy.toJson();
+      expect(json['defaultRole'], 'CAM');
+      expect(json['x'], 0.50);
+      expect(json['y'], 0.35);
+
+      final restored = PitchSlot.fromJson(json);
+      expect(restored.defaultRole, 'CAM');
+      expect(restored.x, 0.50);
+      expect(restored.y, 0.35);
+    });
+
+    test('TacticalFormation.isCustomized detects customized slot coordinates vs canonical presets (Fix 31)', () {
+      final f = TacticalFormation.getById('4-3-3');
+      expect(f.isCustomized(f.slots), isFalse);
+
+      final slightlyShifted = List<PitchSlot>.from(f.slots);
+      slightlyShifted[9] = PitchSlot.clampSlot(9, f.slots[9].x, f.slots[9].y - 0.05); // Move ST higher
+      expect(f.isCustomized(slightlyShifted), isTrue);
+
+      // Shifting back matches default
+      expect(f.isCustomized(f.slots), isFalse);
     });
   });
 

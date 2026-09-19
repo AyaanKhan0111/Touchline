@@ -501,8 +501,9 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
   final Map<String, List<SimPlayer>> _aiClubPlayers = {};
   List<List<ScheduledFixture>> _seasonSchedule = [];
 
-  // Formation & Tactics (Issue #4)
+  // Formation & Tactics (Issue #4 & Fix 31)
   String _formationId = '4-3-3';
+  final Map<String, List<PitchSlot>> _customFormationSlots = {};
 
   // UCL Tournament Competition (Issue #3)
   UclTournament? _uclTournament;
@@ -628,6 +629,18 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     _totalGameweeks = (saved['totalGameweeks'] as num?)?.toInt() ?? 38;
     _winterBudgetAwarded = saved['winterBudgetAwarded'] as bool? ?? false;
     _formationId = saved['formationId'] as String? ?? '4-3-3';
+    _customFormationSlots.clear();
+    if (saved['customFormationSlots'] != null) {
+      try {
+        final rawMap = saved['customFormationSlots'] as Map<String, dynamic>;
+        rawMap.forEach((formId, slotsList) {
+          final list = (slotsList as List)
+              .map((item) => PitchSlot.fromJson(Map<String, dynamic>.from(item as Map)))
+              .toList();
+          _customFormationSlots[formId] = list;
+        });
+      } catch (_) {}
+    }
     final squadIds = List<String>.from((saved['squadIds'] as List?) ?? []);
 
     // Restore or create UCL Tournament (Issue #3)
@@ -1395,6 +1408,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     _winterBudgetAwarded = false;
     _careerPrizeMoneyEarned = 0.0;
     _formationId = '4-3-3';
+    _customFormationSlots.clear();
     _uclTournament = UclTournament.create(userClub: clubName);
 
     // Initialize Domestic Cups (Fix 26 / User Fix 4)
@@ -2141,6 +2155,9 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       pendingTransferOffers: pendingOffersList,
       activeSquadEvents: activeEventsList,
       playerContracts: _playerContracts,
+      customFormationSlots: _customFormationSlots.map(
+        (k, v) => MapEntry(k, v.map((s) => s.toJson()).toList()),
+      ),
     );
 
     final statePayload = <String, dynamic>{
@@ -2164,6 +2181,9 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       'leagueTable': tableList,
       'seasonResults': archiveMap,
       'formationId': _formationId,
+      'customFormationSlots': _customFormationSlots.map(
+        (k, v) => MapEntry(k, v.map((s) => s.toJson()).toList()),
+      ),
       'uclTournament': _uclTournament?.toMap(),
       'faCupTournament': _faCupTournament?.toMap(),
       'carabaoCupTournament': _carabaoCupTournament?.toMap(),
@@ -2331,7 +2351,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     );
   }
 
-  /// Opens the interactive FIFA-style Formation & Pitch Editor (Issue #4)
+  /// Opens the interactive FIFA-style Formation & Pitch Editor (Issue #4 & Fix 31)
   void _openFormationEditor() {
     showModalBottomSheet(
       context: context,
@@ -2340,10 +2360,14 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       builder: (ctx) => FormationEditorSheet(
         squad: _userSquad,
         currentFormationId: _formationId,
-        onSave: (newFormation, newSquad) {
+        initialCustomSlots: _customFormationSlots[_formationId],
+        onSave: (newFormation, newSquad, [customSlots]) {
           setState(() {
             _formationId = newFormation;
             _userSquad = newSquad;
+            if (customSlots != null) {
+              _customFormationSlots[newFormation] = customSlots;
+            }
           });
           _persistCareerState();
         },
@@ -5468,11 +5492,16 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                 ),
               ),
               const Spacer(),
-              // Formation & Tactics Button (Issue #4)
+              // Formation & Tactics Button (Issue #4 & Fix 31)
               OutlinedButton.icon(
                 onPressed: _openFormationEditor,
                 icon: const Icon(Icons.dashboard_customize_rounded, size: 14, color: AppPalette.gold),
-                label: Text('FORMATION ($_formationId)'),
+                label: Text(
+                  _customFormationSlots[_formationId] != null &&
+                          TacticalFormation.getById(_formationId).isCustomized(_customFormationSlots[_formationId]!)
+                      ? 'FORMATION ($_formationId*)'
+                      : 'FORMATION ($_formationId)',
+                ),
                 style: OutlinedButton.styleFrom(
                   foregroundColor: AppPalette.gold,
                   padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
@@ -5537,7 +5566,10 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                   const Icon(Icons.sports_soccer_rounded, size: 14, color: AppPalette.gold),
                   const SizedBox(width: 6),
                   Text(
-                    'STARTING XI • $_formationId',
+                    _customFormationSlots[_formationId] != null &&
+                            TacticalFormation.getById(_formationId).isCustomized(_customFormationSlots[_formationId]!)
+                        ? 'STARTING XI • $_formationId (CUSTOM)'
+                        : 'STARTING XI • $_formationId',
                     style: AppTypography.caption(AppPalette.gold).copyWith(
                       fontWeight: FontWeight.w800,
                       letterSpacing: 0.5,

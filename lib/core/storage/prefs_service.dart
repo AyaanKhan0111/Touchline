@@ -138,6 +138,7 @@ class PrefsService {
   static const _keyCareerPendingTransferOffers = 'career_pending_transfer_offers';
   static const _keyCareerActiveSquadEvents = 'career_active_squad_events';
   static const _keyCareerPlayerContracts = 'career_player_contracts';
+  static const _keyCareerCustomFormationSlots = 'career_custom_formation_slots';
 
   Future<Map<String, dynamic>?> getCareerConfig() async {
     final p = await prefs;
@@ -346,6 +347,14 @@ class PrefsService {
       } catch (_) {}
     }
 
+    final customSlotsRaw = p.getString(_keyCareerCustomFormationSlots);
+    Map<String, dynamic> customFormationSlots = {};
+    if (customSlotsRaw != null) {
+      try {
+        customFormationSlots = jsonDecode(customSlotsRaw) as Map<String, dynamic>;
+      } catch (_) {}
+    }
+
     return {
       'leagueId': p.getString(_keyCareerLeagueId) ?? 'premier_league',
       'clubName': clubName,
@@ -381,6 +390,7 @@ class PrefsService {
       'pendingTransferOffers': pendingTransferOffers,
       'activeSquadEvents': activeSquadEvents,
       'playerContracts': playerContracts,
+      'customFormationSlots': customFormationSlots,
     };
   }
 
@@ -419,6 +429,7 @@ class PrefsService {
     List<Map<String, dynamic>>? pendingTransferOffers,
     List<Map<String, dynamic>>? activeSquadEvents,
     Map<String, int>? playerContracts,
+    Map<String, List<Map<String, dynamic>>>? customFormationSlots,
   }) async {
     final p = await prefs;
     await p.setString(_keyCareerLeagueId, leagueId);
@@ -502,6 +513,9 @@ class PrefsService {
     if (playerContracts != null) {
       await p.setString(_keyCareerPlayerContracts, jsonEncode(playerContracts));
     }
+    if (customFormationSlots != null) {
+      await p.setString(_keyCareerCustomFormationSlots, jsonEncode(customFormationSlots));
+    }
   }
 
   Future<void> clearCareerConfig() async {
@@ -542,5 +556,6 @@ class PrefsService {
     await p.remove(_keyCareerPendingTransferOffers);
     await p.remove(_keyCareerActiveSquadEvents);
     await p.remove(_keyCareerPlayerContracts);
+    await p.remove(_keyCareerCustomFormationSlots);
   }
 }
