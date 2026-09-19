@@ -525,6 +525,67 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
   final Map<String, double> _playerRatingsTotal = {};
   final Map<String, int> _playerRatingsCount = {};
 
+  // Competition-partitioned squad player statistics (Keys: 'league', 'ucl', 'fa_cup', 'carabao_cup')
+  final Map<String, Map<String, int>> _compPlayerAppearances = {};
+  final Map<String, Map<String, int>> _compPlayerGoals = {};
+  final Map<String, Map<String, int>> _compPlayerAssists = {};
+  final Map<String, Map<String, int>> _compPlayerCleanSheets = {};
+  final Map<String, Map<String, double>> _compPlayerRatingsTotal = {};
+  final Map<String, Map<String, int>> _compPlayerRatingsCount = {};
+
+  // Squad Hub Tab state: 0: Formation & Lineup, 1: Player Stats
+  int _squadSubTab = 0;
+  String _squadStatsComp = 'all'; // 'all', 'league', 'ucl', 'fa_cup', 'carabao_cup'
+  int _squadStatsSortBy = 0; // 0: Goals, 1: Assists, 2: Rating, 3: Apps, 4: Clean Sheets, 5: Involvements (G+A)
+
+  // Team Stats Tab state: 0: Squad Player Stats, 1: League Club Comparison
+  int _teamStatsViewMode = 0;
+  String _teamStatsComp = 'all';
+  int _teamStatsPlayerSort = 0; // 0: Goals, 1: Assists, 2: Rating, 3: Apps, 4: Clean Sheets, 5: Involvements (G+A)
+
+  int getPlayerAppearances(String playerName, {String comp = 'all'}) {
+    if (comp == 'all') {
+      return _playerAppearances[playerName] ?? 0;
+    }
+    return _compPlayerAppearances[comp]?[playerName] ?? 0;
+  }
+
+  int getPlayerGoals(String playerName, {String comp = 'all'}) {
+    if (comp == 'all') {
+      return _playerGoals[playerName] ?? 0;
+    }
+    return _compPlayerGoals[comp]?[playerName] ?? 0;
+  }
+
+  int getPlayerAssists(String playerName, {String comp = 'all'}) {
+    if (comp == 'all') {
+      return _playerAssists[playerName] ?? 0;
+    }
+    return _compPlayerAssists[comp]?[playerName] ?? 0;
+  }
+
+  int getPlayerCleanSheets(String playerName, {String comp = 'all'}) {
+    if (comp == 'all') {
+      return _playerCleanSheets[playerName] ?? 0;
+    }
+    return _compPlayerCleanSheets[comp]?[playerName] ?? 0;
+  }
+
+  double getPlayerAvgRating(String playerName, {String comp = 'all'}) {
+    if (comp == 'all') {
+      final count = _playerRatingsCount[playerName] ?? 0;
+      if (count == 0) return 0.0;
+      return (_playerRatingsTotal[playerName] ?? 0.0) / count;
+    }
+    final count = _compPlayerRatingsCount[comp]?[playerName] ?? 0;
+    if (count == 0) return 0.0;
+    return (_compPlayerRatingsTotal[comp]?[playerName] ?? 0.0) / count;
+  }
+
+  int getPlayerGoalInvolvements(String playerName, {String comp = 'all'}) {
+    return getPlayerGoals(playerName, comp: comp) + getPlayerAssists(playerName, comp: comp);
+  }
+
   // League-wide player statistics for Golden Boot, Assists & Clean Sheets (Issue #7 & #8)
   final Map<String, int> _leaguePlayerGoals = {};
   final Map<String, String> _leaguePlayerClubs = {};
@@ -699,6 +760,49 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     savedRatingsCount.forEach((name, val) {
       _playerRatingsCount[name.toString()] = (val as num).toInt();
     });
+
+    // Restore competition-specific squad player statistics
+    _compPlayerAppearances.clear();
+    _compPlayerGoals.clear();
+    _compPlayerAssists.clear();
+    _compPlayerCleanSheets.clear();
+    _compPlayerRatingsTotal.clear();
+    _compPlayerRatingsCount.clear();
+
+    final savedCompStats = (saved['compPlayerStats'] as Map<dynamic, dynamic>?) ?? {};
+    savedCompStats.forEach((compKey, compMap) {
+      if (compMap is Map) {
+        final cKey = compKey.toString();
+        compMap.forEach((pName, pStats) {
+          if (pStats is Map) {
+            final name = pName.toString();
+            final apps = (pStats['apps'] as num?)?.toInt() ?? 0;
+            final goals = (pStats['goals'] as num?)?.toInt() ?? 0;
+            final assists = (pStats['assists'] as num?)?.toInt() ?? 0;
+            final cs = (pStats['cleanSheets'] as num?)?.toInt() ?? 0;
+            final rTot = (pStats['ratingsTotal'] as num?)?.toDouble() ?? 0.0;
+            final rCnt = (pStats['ratingsCount'] as num?)?.toInt() ?? 0;
+
+            if (apps > 0) _compPlayerAppearances.putIfAbsent(cKey, () => {})[name] = apps;
+            if (goals > 0) _compPlayerGoals.putIfAbsent(cKey, () => {})[name] = goals;
+            if (assists > 0) _compPlayerAssists.putIfAbsent(cKey, () => {})[name] = assists;
+            if (cs > 0) _compPlayerCleanSheets.putIfAbsent(cKey, () => {})[name] = cs;
+            if (rTot > 0.0) _compPlayerRatingsTotal.putIfAbsent(cKey, () => {})[name] = rTot;
+            if (rCnt > 0) _compPlayerRatingsCount.putIfAbsent(cKey, () => {})[name] = rCnt;
+          }
+        });
+      }
+    });
+
+    // Backward compatibility: if no comp breakdown was saved, assign legacy stats to league
+    if (_compPlayerAppearances.isEmpty && _playerAppearances.isNotEmpty) {
+      _compPlayerAppearances['league'] = Map<String, int>.from(_playerAppearances);
+      _compPlayerGoals['league'] = Map<String, int>.from(_playerGoals);
+      _compPlayerAssists['league'] = Map<String, int>.from(_playerAssists);
+      _compPlayerCleanSheets['league'] = Map<String, int>.from(_playerCleanSheets);
+      _compPlayerRatingsTotal['league'] = Map<String, double>.from(_playerRatingsTotal);
+      _compPlayerRatingsCount['league'] = Map<String, int>.from(_playerRatingsCount);
+    }
 
     // Restore league-wide scorers for Golden Boot race (Issue #8)
     _leaguePlayerGoals.clear();
@@ -1647,6 +1751,12 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     _playerCleanSheets.clear();
     _playerRatingsTotal.clear();
     _playerRatingsCount.clear();
+    _compPlayerAppearances.clear();
+    _compPlayerGoals.clear();
+    _compPlayerAssists.clear();
+    _compPlayerCleanSheets.clear();
+    _compPlayerRatingsTotal.clear();
+    _compPlayerRatingsCount.clear();
     _leaguePlayerGoals.clear();
     _leaguePlayerClubs.clear();
     _leaguePlayerAssists.clear();
@@ -1702,6 +1812,63 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         ],
       ),
     );
+  }
+
+  /// Records appearances, goals, assists, ratings, and clean sheets for the user's squad
+  /// both in overall tallies and in the competition-specific partition.
+  void _recordMatchPlayerStats({
+    required MatchResult match,
+    required String compKey, // 'league', 'ucl', 'fa_cup', 'carabao_cup'
+  }) {
+    final isHome = match.homeClub == _userClub;
+    final userGoalEvents = isHome ? match.homeGoalEvents : match.awayGoalEvents;
+    final userRatings = isHome ? match.homePlayerRatings : match.awayPlayerRatings;
+    final userConceded = isHome ? match.awayGoals : match.homeGoals;
+
+    // 1. Appearances: starting XI
+    if (_userSquad.isNotEmpty) {
+      for (final p in _userSquad.take(11)) {
+        _playerAppearances[p.name] = (_playerAppearances[p.name] ?? 0) + 1;
+        final cApps = _compPlayerAppearances.putIfAbsent(compKey, () => <String, int>{});
+        cApps[p.name] = (cApps[p.name] ?? 0) + 1;
+      }
+    }
+
+    // 2. Goals & Assists
+    for (final event in userGoalEvents) {
+      _playerGoals[event.scorerName] = (_playerGoals[event.scorerName] ?? 0) + 1;
+      final cGoals = _compPlayerGoals.putIfAbsent(compKey, () => <String, int>{});
+      cGoals[event.scorerName] = (cGoals[event.scorerName] ?? 0) + 1;
+
+      if (event.assisterName != null && event.assisterName!.isNotEmpty) {
+        _playerAssists[event.assisterName!] = (_playerAssists[event.assisterName!] ?? 0) + 1;
+        final cAssists = _compPlayerAssists.putIfAbsent(compKey, () => <String, int>{});
+        cAssists[event.assisterName!] = (cAssists[event.assisterName!] ?? 0) + 1;
+      }
+    }
+
+    // 3. Match Ratings
+    userRatings.forEach((playerName, rating) {
+      _playerRatingsTotal[playerName] = (_playerRatingsTotal[playerName] ?? 0.0) + rating;
+      _playerRatingsCount[playerName] = (_playerRatingsCount[playerName] ?? 0) + 1;
+
+      final cTot = _compPlayerRatingsTotal.putIfAbsent(compKey, () => <String, double>{});
+      cTot[playerName] = (cTot[playerName] ?? 0.0) + rating;
+
+      final cCnt = _compPlayerRatingsCount.putIfAbsent(compKey, () => <String, int>{});
+      cCnt[playerName] = (cCnt[playerName] ?? 0) + 1;
+    });
+
+    // 4. Clean Sheets (Goalkeeper and Defenders if conceded 0)
+    if (userConceded == 0 && _userSquad.isNotEmpty) {
+      for (final p in _userSquad.take(11)) {
+        if (p.primaryPosition == 'GK' || const ['CB', 'LB', 'RB', 'LWB', 'RWB'].contains(p.primaryPosition)) {
+          _playerCleanSheets[p.name] = (_playerCleanSheets[p.name] ?? 0) + 1;
+          final cCs = _compPlayerCleanSheets.putIfAbsent(compKey, () => <String, int>{});
+          cCs[p.name] = (cCs[p.name] ?? 0) + 1;
+        }
+      }
+    }
   }
 
   Future<void> _simMatchday() async {
@@ -1860,42 +2027,14 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       }
     }
 
-    // Track player appearances for active 11
-    if (_userSquad.isNotEmpty) {
-      for (final p in _userSquad.take(11)) {
-        _playerAppearances[p.name] = (_playerAppearances[p.name] ?? 0) + 1;
-      }
-    }
-
-    // Track goals & assists scored by user squad players in user match
+    // Track player appearances, goals, assists, ratings & clean sheets for league
     final userMatch = resultsThisWeek.firstWhere(
       (m) => m.homeClub == _userClub || m.awayClub == _userClub,
       orElse: () => resultsThisWeek.first,
     );
     final isHome = userMatch.homeClub == _userClub;
-    final userGoalEvents = isHome ? userMatch.homeGoalEvents : userMatch.awayGoalEvents;
-    for (final event in userGoalEvents) {
-      _playerGoals[event.scorerName] = (_playerGoals[event.scorerName] ?? 0) + 1;
-      if (event.assisterName != null && event.assisterName!.isNotEmpty) {
-        _playerAssists[event.assisterName!] = (_playerAssists[event.assisterName!] ?? 0) + 1;
-      }
-    }
-
-    // Track user player match ratings
-    final userRatings = isHome ? userMatch.homePlayerRatings : userMatch.awayPlayerRatings;
-    userRatings.forEach((playerName, rating) {
-      _playerRatingsTotal[playerName] = (_playerRatingsTotal[playerName] ?? 0.0) + rating;
-      _playerRatingsCount[playerName] = (_playerRatingsCount[playerName] ?? 0) + 1;
-    });
-
-    // Track clean sheets for starting GK and DEF if user conceded 0 goals
-    final userConceded = isHome ? userMatch.awayGoals : userMatch.homeGoals;
-    if (userConceded == 0 && _userSquad.isNotEmpty) {
-      for (final p in _userSquad.take(11)) {
-        if (p.primaryPosition == 'GK' || const ['CB', 'LB', 'RB', 'LWB', 'RWB'].contains(p.primaryPosition)) {
-          _playerCleanSheets[p.name] = (_playerCleanSheets[p.name] ?? 0) + 1;
-        }
-      }
+    if (userMatch.homeClub == _userClub || userMatch.awayClub == _userClub) {
+      _recordMatchPlayerStats(match: userMatch, compKey: 'league');
     }
 
     // Midweek UEFA Champions League Simulation (Issue #3 & Fix 24)
@@ -1945,6 +2084,11 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
 
         _uclTournament!.recordFixtureResult(uFix, uRes);
         _recentUclResults.add(uRes);
+
+        // Record user player statistics for UCL match
+        if (uHome == _userClub || uAway == _userClub) {
+          _recordMatchPlayerStats(match: uRes, compKey: 'ucl');
+        }
       }
 
       // Ensure User Club UCL match is placed at index 0 in _recentUclResults (Fix 23 / User Fix 1)
@@ -1963,10 +2107,11 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     final carabaoRd = CupTournament.getCarabaoRoundForLeagueGw(_currentGameweek, totalGameweeks: _totalGameweeks);
     if (carabaoRd != null && _carabaoCupTournament != null) {
       _recentCarabaoResults.clear();
+      final cupClubPlayers = Map<String, List<SimPlayer>>.from(_aiClubPlayers)..[_userClub] = userSimPlayers;
       final cResults = _carabaoCupTournament!.simulateRound(
         carabaoRd,
         simEngine: _sim,
-        clubPlayers: _aiClubPlayers,
+        clubPlayers: cupClubPlayers,
         totalGameweeks: _totalGameweeks,
       );
       _recentCarabaoResults.addAll(cResults);
@@ -1981,27 +2126,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       // Track user player appearances and stats for Carabao Cup
       final userCarabaoMatch = _recentCarabaoResults.where((m) => m.homeClub == _userClub || m.awayClub == _userClub).firstOrNull;
       if (userCarabaoMatch != null) {
-        final isHomeC = userCarabaoMatch.homeClub == _userClub;
-        final cUserGoals = isHomeC ? userCarabaoMatch.homeGoalEvents : userCarabaoMatch.awayGoalEvents;
-        for (final ev in cUserGoals) {
-          _playerGoals[ev.scorerName] = (_playerGoals[ev.scorerName] ?? 0) + 1;
-          if (ev.assisterName != null && ev.assisterName!.isNotEmpty) {
-            _playerAssists[ev.assisterName!] = (_playerAssists[ev.assisterName!] ?? 0) + 1;
-          }
-        }
-        final cRatings = isHomeC ? userCarabaoMatch.homePlayerRatings : userCarabaoMatch.awayPlayerRatings;
-        cRatings.forEach((pName, rating) {
-          _playerRatingsTotal[pName] = (_playerRatingsTotal[pName] ?? 0.0) + rating;
-          _playerRatingsCount[pName] = (_playerRatingsCount[pName] ?? 0) + 1;
-        });
-        final cConceded = isHomeC ? userCarabaoMatch.awayGoals : userCarabaoMatch.homeGoals;
-        if (cConceded == 0 && _userSquad.isNotEmpty) {
-          for (final p in _userSquad.take(11)) {
-            if (p.primaryPosition == 'GK' || const ['CB', 'LB', 'RB', 'LWB', 'RWB'].contains(p.primaryPosition)) {
-              _playerCleanSheets[p.name] = (_playerCleanSheets[p.name] ?? 0) + 1;
-            }
-          }
-        }
+        _recordMatchPlayerStats(match: userCarabaoMatch, compKey: 'carabao_cup');
       }
     } else {
       _recentCarabaoResults.clear();
@@ -2011,10 +2136,11 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     final faRd = CupTournament.getFaCupRoundForLeagueGw(_currentGameweek, totalGameweeks: _totalGameweeks);
     if (faRd != null && _faCupTournament != null) {
       _recentFaCupResults.clear();
+      final cupClubPlayers = Map<String, List<SimPlayer>>.from(_aiClubPlayers)..[_userClub] = userSimPlayers;
       final fResults = _faCupTournament!.simulateRound(
         faRd,
         simEngine: _sim,
-        clubPlayers: _aiClubPlayers,
+        clubPlayers: cupClubPlayers,
         totalGameweeks: _totalGameweeks,
       );
       _recentFaCupResults.addAll(fResults);
@@ -2029,27 +2155,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       // Track user player appearances and stats for FA Cup
       final userFaMatch = _recentFaCupResults.where((m) => m.homeClub == _userClub || m.awayClub == _userClub).firstOrNull;
       if (userFaMatch != null) {
-        final isHomeF = userFaMatch.homeClub == _userClub;
-        final fUserGoals = isHomeF ? userFaMatch.homeGoalEvents : userFaMatch.awayGoalEvents;
-        for (final ev in fUserGoals) {
-          _playerGoals[ev.scorerName] = (_playerGoals[ev.scorerName] ?? 0) + 1;
-          if (ev.assisterName != null && ev.assisterName!.isNotEmpty) {
-            _playerAssists[ev.assisterName!] = (_playerAssists[ev.assisterName!] ?? 0) + 1;
-          }
-        }
-        final fRatings = isHomeF ? userFaMatch.homePlayerRatings : userFaMatch.awayPlayerRatings;
-        fRatings.forEach((pName, rating) {
-          _playerRatingsTotal[pName] = (_playerRatingsTotal[pName] ?? 0.0) + rating;
-          _playerRatingsCount[pName] = (_playerRatingsCount[pName] ?? 0) + 1;
-        });
-        final fConceded = isHomeF ? userFaMatch.awayGoals : userFaMatch.homeGoals;
-        if (fConceded == 0 && _userSquad.isNotEmpty) {
-          for (final p in _userSquad.take(11)) {
-            if (p.primaryPosition == 'GK' || const ['CB', 'LB', 'RB', 'LWB', 'RWB'].contains(p.primaryPosition)) {
-              _playerCleanSheets[p.name] = (_playerCleanSheets[p.name] ?? 0) + 1;
-            }
-          }
-        }
+        _recordMatchPlayerStats(match: userFaMatch, compKey: 'fa_cup');
       }
     } else {
       _recentFaCupResults.clear();
@@ -2302,6 +2408,30 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         'cleanSheets': _playerCleanSheets[p.name] ?? 0,
       };
     }
+
+    final compStatsMap = <String, Map<String, dynamic>>{};
+    for (final comp in const ['league', 'ucl', 'fa_cup', 'carabao_cup']) {
+      final compData = <String, Map<String, dynamic>>{};
+      for (final p in _userSquad) {
+        final apps = _compPlayerAppearances[comp]?[p.name] ?? 0;
+        final goals = _compPlayerGoals[comp]?[p.name] ?? 0;
+        final assists = _compPlayerAssists[comp]?[p.name] ?? 0;
+        final cs = _compPlayerCleanSheets[comp]?[p.name] ?? 0;
+        final rTot = _compPlayerRatingsTotal[comp]?[p.name] ?? 0.0;
+        final rCnt = _compPlayerRatingsCount[comp]?[p.name] ?? 0;
+        if (apps > 0 || goals > 0 || assists > 0 || cs > 0 || rCnt > 0) {
+          compData[p.name] = {
+            'apps': apps,
+            'goals': goals,
+            'assists': assists,
+            'cleanSheets': cs,
+            'ratingsTotal': rTot,
+            'ratingsCount': rCnt,
+          };
+        }
+      }
+      compStatsMap[comp] = compData;
+    }
     final leagueScorersMap = <String, Map<String, dynamic>>{};
     _leaguePlayerGoals.forEach((player, goals) {
       leagueScorersMap[player] = {
@@ -2346,6 +2476,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       winterBudgetAwarded: _winterBudgetAwarded,
       squadIds: squadNames,
       playerStats: statsMap,
+      compPlayerStats: compStatsMap,
       recentResults: recentList,
       recentUclResults: recentUclList,
       recentFaCupResults: recentFaList,
@@ -2387,6 +2518,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       'winterBudgetAwarded': _winterBudgetAwarded,
       'squadIds': squadNames,
       'playerStats': statsMap,
+      'compPlayerStats': compStatsMap,
       'recentResults': recentList,
       'recentUclResults': recentUclList,
       'recentFaCupResults': recentFaList,
@@ -4871,7 +5003,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         },
         children: [
           _buildMatchesHubTab(isDark, ink, inkMuted, border, activeLeague),
-          _buildSquadTab(isDark, ink, inkMuted, border),
+          _buildSquadTab(isDark, ink, inkMuted, border, activeLeague),
           _buildTransfersTab(isDark, ink, inkMuted, border),
           _buildTablesTab(isDark, ink, inkMuted, activeLeague),
           _buildResultsTab(isDark, ink, inkMuted, activeLeague),
@@ -5364,68 +5496,816 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     );
   }
 
-  /// Tab 1: Squad Hub — Formation, Starting XI, Bench, Auto-Pick, Swap & Tactics
-  Widget _buildSquadTab(bool isDark, Color ink, Color inkMuted, Color border) {
+  /// Tab 1: Squad Hub — Formation, Starting XI, Bench, Auto-Pick, Swap, Tactics & Player Stats
+  Widget _buildSquadTab(bool isDark, Color ink, Color inkMuted, Color border, LeagueDefinition activeLeague) {
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       physics: const BouncingScrollPhysics(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // Tactical Header Card
+          // Sub-Tab Switcher: Formation & Lineup vs Player Stats
           Container(
-            padding: const EdgeInsets.all(14),
+            padding: const EdgeInsets.all(3),
+            margin: const EdgeInsets.only(bottom: 14),
             decoration: BoxDecoration(
-              color: isDark ? AppPalette.darkCard : AppPalette.lightCard,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: border),
+              color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.05),
+              borderRadius: BorderRadius.circular(10),
             ),
             child: Row(
               children: [
-                Container(
-                  padding: const EdgeInsets.all(10),
-                  decoration: BoxDecoration(
-                    color: AppPalette.darkAccent.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: const Icon(Icons.sports_soccer_rounded, color: AppPalette.darkAccent, size: 24),
-                ),
-                const SizedBox(width: 12),
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'FORMATION: $_formationId',
-                        style: AppTypography.caption(AppPalette.gold).copyWith(fontWeight: FontWeight.w800, letterSpacing: 0.6),
+                  child: InkWell(
+                    onTap: () => setState(() => _squadSubTab = 0),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 9),
+                      decoration: BoxDecoration(
+                        color: _squadSubTab == 0
+                            ? (isDark ? AppPalette.darkSurfaceRaised : AppPalette.lightSurfaceRaised)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(8),
+                        boxShadow: _squadSubTab == 0
+                            ? [BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 4)]
+                            : null,
                       ),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Starting XI: 4 Defenders • 3 Midfielders • 3 Attackers',
-                        style: AppTypography.bodySmall(inkMuted).copyWith(fontSize: 11),
+                      alignment: Alignment.center,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.dashboard_customize_rounded,
+                            size: 15,
+                            color: _squadSubTab == 0 ? AppPalette.gold : inkMuted,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            'FORMATION & LINEUP',
+                            style: TextStyle(
+                              fontFamily: AppTypography.fontFamily,
+                              fontSize: 11,
+                              fontWeight: _squadSubTab == 0 ? FontWeight.w800 : FontWeight.w600,
+                              color: _squadSubTab == 0 ? AppPalette.gold : inkMuted,
+                              letterSpacing: 0.4,
+                            ),
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
                 ),
-                FilledButton.tonalIcon(
-                  onPressed: _openFormationEditor,
-                  icon: const Icon(Icons.dashboard_customize_rounded, size: 16),
-                  label: const Text('Pitch View'),
-                  style: FilledButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: InkWell(
+                    onTap: () => setState(() => _squadSubTab = 1),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 9),
+                      decoration: BoxDecoration(
+                        color: _squadSubTab == 1
+                            ? (isDark ? AppPalette.darkSurfaceRaised : AppPalette.lightSurfaceRaised)
+                            : Colors.transparent,
+                        borderRadius: BorderRadius.circular(8),
+                        boxShadow: _squadSubTab == 1
+                            ? [BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 4)]
+                            : null,
+                      ),
+                      alignment: Alignment.center,
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.table_chart_rounded,
+                            size: 15,
+                            color: _squadSubTab == 1 ? AppPalette.gold : inkMuted,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            'PLAYER STATS',
+                            style: TextStyle(
+                              fontFamily: AppTypography.fontFamily,
+                              fontSize: 11,
+                              fontWeight: _squadSubTab == 1 ? FontWeight.w800 : FontWeight.w600,
+                              color: _squadSubTab == 1 ? AppPalette.gold : inkMuted,
+                              letterSpacing: 0.4,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ],
             ),
           ),
 
-          const SizedBox(height: 12),
+          if (_squadSubTab == 0) ...[
+            // Tactical Header Card
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: isDark ? AppPalette.darkCard : AppPalette.lightCard,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: border),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppPalette.darkAccent.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.sports_soccer_rounded, color: AppPalette.darkAccent, size: 24),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'FORMATION: $_formationId',
+                          style: AppTypography.caption(AppPalette.gold).copyWith(fontWeight: FontWeight.w800, letterSpacing: 0.6),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Starting XI: 4 Defenders • 3 Midfielders • 3 Attackers',
+                          style: AppTypography.bodySmall(inkMuted).copyWith(fontSize: 11),
+                        ),
+                      ],
+                    ),
+                  ),
+                  FilledButton.tonalIcon(
+                    onPressed: _openFormationEditor,
+                    icon: const Icon(Icons.dashboard_customize_rounded, size: 16),
+                    label: const Text('Pitch View'),
+                    style: FilledButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    ),
+                  ),
+                ],
+              ),
+            ),
 
-          // Squad Management Section (Starting XI, Bench, Reserves, Swaps, Auto-Pick)
-          _buildSquadManagementSection(isDark, ink, inkMuted, border),
+            const SizedBox(height: 12),
+
+            // Squad Management Section (Starting XI, Bench, Reserves, Swaps, Auto-Pick)
+            _buildSquadManagementSection(isDark, ink, inkMuted, border),
+          ] else ...[
+            // Squad Player Statistics View
+            _buildSquadStatsView(isDark, ink, inkMuted, border, activeLeague),
+          ],
         ],
       ),
     );
+  }
+
+  /// Squad Player Statistics view with competition filter pills, summary metrics, and table
+  Widget _buildSquadStatsView(bool isDark, Color ink, Color inkMuted, Color border, LeagueDefinition activeLeague) {
+    final totalGoals = _userSquad.fold<int>(0, (sum, p) => sum + getPlayerGoals(p.name, comp: _squadStatsComp));
+    final totalAssists = _userSquad.fold<int>(0, (sum, p) => sum + getPlayerAssists(p.name, comp: _squadStatsComp));
+    final totalCleanSheets = _userSquad.fold<int>(0, (maxVal, p) {
+      final cs = getPlayerCleanSheets(p.name, comp: _squadStatsComp);
+      return cs > maxVal ? cs : maxVal;
+    });
+    final ratedPlayers = _userSquad.where((p) => getPlayerAvgRating(p.name, comp: _squadStatsComp) > 0).toList();
+    final teamAvgRating = ratedPlayers.isNotEmpty
+        ? ratedPlayers.fold<double>(0.0, (sum, p) => sum + getPlayerAvgRating(p.name, comp: _squadStatsComp)) / ratedPlayers.length
+        : 0.0;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // 1. Competition selector pills
+        _buildCompetitionFilterPills(
+          selectedComp: _squadStatsComp,
+          onSelected: (comp) => setState(() => _squadStatsComp = comp),
+          isDark: isDark,
+          ink: ink,
+          inkMuted: inkMuted,
+          activeLeague: activeLeague,
+        ),
+
+        // 2. Overview Banner
+        Container(
+          padding: const EdgeInsets.all(12),
+          margin: const EdgeInsets.only(bottom: 12),
+          decoration: BoxDecoration(
+            color: isDark ? AppPalette.darkCard : AppPalette.lightCard,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppPalette.gold.withValues(alpha: 0.3)),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: [
+              _buildSquadSummaryStat('GOALS', '$totalGoals', Icons.sports_soccer_rounded, ink),
+              _buildSquadSummaryStat('ASSISTS', '$totalAssists', Icons.auto_awesome_rounded, ink),
+              _buildSquadSummaryStat('CLEAN SHTS', '$totalCleanSheets', Icons.shield_rounded, ink),
+              _buildSquadSummaryStat(
+                'SQUAD AVG',
+                teamAvgRating > 0 ? '★ ${teamAvgRating.toStringAsFixed(2)}' : '—',
+                Icons.star_rounded,
+                ink,
+              ),
+            ],
+          ),
+        ),
+
+        // 3. Player Stats Table with Podiums & Sort Chips
+        _buildSquadPlayerStatsTable(
+          isDark: isDark,
+          ink: ink,
+          inkMuted: inkMuted,
+          compKey: _squadStatsComp,
+          sortBy: _squadStatsSortBy,
+          onSortChanged: (idx) => setState(() => _squadStatsSortBy = idx),
+          showPodiums: true,
+          activeLeague: activeLeague,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSquadSummaryStat(String label, String value, IconData icon, Color ink) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(icon, size: 16, color: AppPalette.gold),
+        const SizedBox(height: 3),
+        Text(
+          value,
+          style: TextStyle(
+            fontFamily: AppTypography.fontFamily,
+            fontSize: 13,
+            fontWeight: FontWeight.w800,
+            color: ink,
+          ),
+        ),
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 9,
+            fontWeight: FontWeight.w700,
+            color: AppPalette.gold,
+            letterSpacing: 0.3,
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Competition selector filter chips / pills
+  Widget _buildCompetitionFilterPills({
+    required String selectedComp,
+    required ValueChanged<String> onSelected,
+    required bool isDark,
+    required Color ink,
+    required Color inkMuted,
+    LeagueDefinition? activeLeague,
+  }) {
+    final comps = [
+      {'id': 'all', 'label': 'ALL COMPS', 'icon': Icons.all_inclusive_rounded},
+      {'id': 'league', 'label': activeLeague?.name.toUpperCase() ?? 'LEAGUE', 'icon': Icons.emoji_events_rounded},
+      {'id': 'ucl', 'label': 'UCL', 'icon': Icons.star_rounded},
+      {'id': 'fa_cup', 'label': 'FA CUP', 'icon': Icons.military_tech_rounded},
+      {'id': 'carabao_cup', 'label': 'CARABAO CUP', 'icon': Icons.local_cafe_rounded},
+    ];
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        children: comps.map((c) {
+          final isSelected = selectedComp == c['id'];
+          return Padding(
+            padding: const EdgeInsets.only(right: 6),
+            child: InkWell(
+              onTap: () => onSelected(c['id'] as String),
+              borderRadius: BorderRadius.circular(20),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? AppPalette.gold
+                      : (isDark ? AppPalette.darkSurfaceRaised : AppPalette.lightSurfaceRaised),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: isSelected ? AppPalette.gold : (isDark ? Colors.white10 : Colors.black12),
+                  ),
+                  boxShadow: isSelected
+                      ? [
+                          BoxShadow(
+                            color: AppPalette.gold.withValues(alpha: 0.3),
+                            blurRadius: 6,
+                            offset: const Offset(0, 2),
+                          ),
+                        ]
+                      : null,
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      c['icon'] as IconData,
+                      size: 13,
+                      color: isSelected ? Colors.black : (isDark ? Colors.white70 : Colors.black87),
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      c['label'] as String,
+                      style: TextStyle(
+                        fontFamily: AppTypography.fontFamily,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: isSelected ? Colors.black : ink,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  /// Reusable Player Statistics Table with podiums and sort chips
+  Widget _buildSquadPlayerStatsTable({
+    required bool isDark,
+    required Color ink,
+    required Color inkMuted,
+    required String compKey,
+    required int sortBy,
+    required ValueChanged<int> onSortChanged,
+    bool showPodiums = true,
+    LeagueDefinition? activeLeague,
+  }) {
+    // 1. Sort squad based on sortBy
+    final players = List<Player>.from(_userSquad);
+    players.sort((a, b) {
+      switch (sortBy) {
+        case 0: // Goals
+          final gA = getPlayerGoals(a.name, comp: compKey);
+          final gB = getPlayerGoals(b.name, comp: compKey);
+          if (gB != gA) return gB.compareTo(gA);
+          return getPlayerAssists(b.name, comp: compKey).compareTo(getPlayerAssists(a.name, comp: compKey));
+        case 1: // Assists
+          final aA = getPlayerAssists(a.name, comp: compKey);
+          final aB = getPlayerAssists(b.name, comp: compKey);
+          if (aB != aA) return aB.compareTo(aA);
+          return getPlayerGoals(b.name, comp: compKey).compareTo(getPlayerGoals(a.name, comp: compKey));
+        case 2: // Rating
+          final rA = getPlayerAvgRating(a.name, comp: compKey);
+          final rB = getPlayerAvgRating(b.name, comp: compKey);
+          if (rB != rA) return rB.compareTo(rA);
+          return getPlayerAppearances(b.name, comp: compKey).compareTo(getPlayerAppearances(a.name, comp: compKey));
+        case 3: // Apps
+          final apA = getPlayerAppearances(a.name, comp: compKey);
+          final apB = getPlayerAppearances(b.name, comp: compKey);
+          if (apB != apA) return apB.compareTo(apA);
+          return getPlayerGoals(b.name, comp: compKey).compareTo(getPlayerGoals(a.name, comp: compKey));
+        case 4: // Clean Sheets
+          final csA = getPlayerCleanSheets(a.name, comp: compKey);
+          final csB = getPlayerCleanSheets(b.name, comp: compKey);
+          if (csB != csA) return csB.compareTo(csA);
+          return getPlayerAppearances(b.name, comp: compKey).compareTo(getPlayerAppearances(a.name, comp: compKey));
+        case 5: // G+A
+          final gaA = getPlayerGoalInvolvements(a.name, comp: compKey);
+          final gaB = getPlayerGoalInvolvements(b.name, comp: compKey);
+          if (gaB != gaA) return gaB.compareTo(gaA);
+          return getPlayerGoals(b.name, comp: compKey).compareTo(getPlayerGoals(a.name, comp: compKey));
+        default:
+          return 0;
+      }
+    });
+
+    final hasAnyStats = players.any((p) =>
+        getPlayerAppearances(p.name, comp: compKey) > 0 ||
+        getPlayerGoals(p.name, comp: compKey) > 0 ||
+        getPlayerAssists(p.name, comp: compKey) > 0);
+
+    // Leaders for podium
+    Player? topScorer;
+    int maxGoals = 0;
+    Player? topAssister;
+    int maxAssists = 0;
+    Player? bestDefender;
+    int maxCs = 0;
+    Player? mvp;
+    double maxRating = 0.0;
+
+    for (final p in players) {
+      final g = getPlayerGoals(p.name, comp: compKey);
+      if (g > maxGoals) {
+        maxGoals = g;
+        topScorer = p;
+      }
+      final a = getPlayerAssists(p.name, comp: compKey);
+      if (a > maxAssists) {
+        maxAssists = a;
+        topAssister = p;
+      }
+      final cs = getPlayerCleanSheets(p.name, comp: compKey);
+      if (cs > maxCs) {
+        maxCs = cs;
+        bestDefender = p;
+      }
+      final r = getPlayerAvgRating(p.name, comp: compKey);
+      if (r > maxRating && getPlayerAppearances(p.name, comp: compKey) > 0) {
+        maxRating = r;
+        mvp = p;
+      }
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Podiums
+        if (showPodiums && hasAnyStats && (topScorer != null || topAssister != null || bestDefender != null || mvp != null)) ...[
+          Container(
+            padding: const EdgeInsets.all(12),
+            margin: const EdgeInsets.only(bottom: 12),
+            decoration: BoxDecoration(
+              color: isDark ? AppPalette.darkSurfaceRaised : AppPalette.lightSurfaceRaised,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppPalette.gold.withValues(alpha: 0.25)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.workspace_premium_rounded, size: 15, color: AppPalette.gold),
+                    const SizedBox(width: 6),
+                    Text(
+                      'SQUAD LEADERS • ${_getCompDisplayName(compKey, league: activeLeague).toUpperCase()}',
+                      style: AppTypography.caption(AppPalette.gold).copyWith(
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildSquadLeaderCard(
+                        title: 'TOP SCORER',
+                        icon: Icons.sports_soccer_rounded,
+                        player: topScorer,
+                        statText: maxGoals > 0 ? '$maxGoals Goals' : '—',
+                        isDark: isDark,
+                        ink: ink,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _buildSquadLeaderCard(
+                        title: 'PLAYMAKER',
+                        icon: Icons.auto_awesome_rounded,
+                        player: topAssister,
+                        statText: maxAssists > 0 ? '$maxAssists Assists' : '—',
+                        isDark: isDark,
+                        ink: ink,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildSquadLeaderCard(
+                        title: 'CLEAN SHEETS',
+                        icon: Icons.shield_rounded,
+                        player: bestDefender,
+                        statText: maxCs > 0 ? '$maxCs Clean Sheets' : '—',
+                        isDark: isDark,
+                        ink: ink,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: _buildSquadLeaderCard(
+                        title: 'HIGHEST RATED',
+                        icon: Icons.star_rounded,
+                        player: mvp,
+                        statText: maxRating > 0 ? '★ ${maxRating.toStringAsFixed(2)}' : '—',
+                        isDark: isDark,
+                        ink: ink,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+        ],
+
+        // Sort Metric Chips
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          physics: const BouncingScrollPhysics(),
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Row(
+            children: [
+              _buildSquadStatSortChip(0, '⚽ Goals', sortBy, onSortChanged, isDark),
+              const SizedBox(width: 6),
+              _buildSquadStatSortChip(1, '🎯 Assists', sortBy, onSortChanged, isDark),
+              const SizedBox(width: 6),
+              _buildSquadStatSortChip(2, '⭐ Rating', sortBy, onSortChanged, isDark),
+              const SizedBox(width: 6),
+              _buildSquadStatSortChip(5, '💥 G+A', sortBy, onSortChanged, isDark),
+              const SizedBox(width: 6),
+              _buildSquadStatSortChip(3, '🏃 Apps', sortBy, onSortChanged, isDark),
+              const SizedBox(width: 6),
+              _buildSquadStatSortChip(4, '🧤 Clean Sheets', sortBy, onSortChanged, isDark),
+            ],
+          ),
+        ),
+
+        // Table
+        if (!hasAnyStats)
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+            decoration: BoxDecoration(
+              color: isDark ? AppPalette.darkSurfaceRaised : AppPalette.lightSurfaceRaised,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: isDark ? Colors.white10 : Colors.black12),
+            ),
+            child: Column(
+              children: [
+                const Icon(Icons.analytics_outlined, size: 32, color: AppPalette.gold),
+                const SizedBox(height: 8),
+                Text(
+                  'No Match Statistics Yet',
+                  style: AppTypography.titleMedium(ink).copyWith(fontSize: 14),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Simulate ${_getCompDisplayName(compKey, league: activeLeague)} fixtures to track appearances, goals, assists, clean sheets, and ratings.',
+                  textAlign: TextAlign.center,
+                  style: AppTypography.caption(inkMuted),
+                ),
+              ],
+            ),
+          )
+        else
+          Table(
+            columnWidths: const {
+              0: FlexColumnWidth(0.6), // #
+              1: FlexColumnWidth(3.0), // Player
+              2: FlexColumnWidth(0.8), // Pos
+              3: FlexColumnWidth(0.7), // Apps
+              4: FlexColumnWidth(0.7), // G
+              5: FlexColumnWidth(0.7), // A
+              6: FlexColumnWidth(0.7), // CS
+              7: FlexColumnWidth(1.1), // Rating
+              8: FlexColumnWidth(0.8), // G+A
+            },
+            defaultVerticalAlignment: TableCellVerticalAlignment.middle,
+            children: [
+              TableRow(
+                children: [
+                  _headerCell('#', inkMuted),
+                  _headerCell('PLAYER', inkMuted, align: TextAlign.left),
+                  _headerCell('POS', inkMuted),
+                  _headerCell('APP', sortBy == 3 ? AppPalette.gold : inkMuted),
+                  _headerCell('G', sortBy == 0 ? AppPalette.gold : inkMuted),
+                  _headerCell('A', sortBy == 1 ? AppPalette.gold : inkMuted),
+                  _headerCell('CS', sortBy == 4 ? AppPalette.gold : inkMuted),
+                  _headerCell('★', sortBy == 2 ? AppPalette.gold : inkMuted),
+                  _headerCell('G+A', sortBy == 5 ? AppPalette.gold : inkMuted),
+                ],
+              ),
+              ...List.generate(players.length, (idx) {
+                final p = players[idx];
+                final apps = getPlayerAppearances(p.name, comp: compKey);
+                final goals = getPlayerGoals(p.name, comp: compKey);
+                final assists = getPlayerAssists(p.name, comp: compKey);
+                final cs = getPlayerCleanSheets(p.name, comp: compKey);
+                final rating = getPlayerAvgRating(p.name, comp: compKey);
+                final ga = goals + assists;
+
+                final rowColor = idx % 2 == 1
+                    ? (isDark ? Colors.white.withValues(alpha: 0.02) : Colors.black.withValues(alpha: 0.02))
+                    : null;
+
+                Widget rankWidget;
+                if (idx == 0 && (goals > 0 || apps > 0)) {
+                  rankWidget = const Center(child: Text('🥇', style: TextStyle(fontSize: 12)));
+                } else if (idx == 1 && (goals > 0 || apps > 0)) {
+                  rankWidget = const Center(child: Text('🥈', style: TextStyle(fontSize: 12)));
+                } else if (idx == 2 && (goals > 0 || apps > 0)) {
+                  rankWidget = const Center(child: Text('🥉', style: TextStyle(fontSize: 12)));
+                } else {
+                  rankWidget = _cell('${idx + 1}', inkMuted);
+                }
+
+                Color ratingColor;
+                if (rating >= 7.5) {
+                  ratingColor = Colors.greenAccent;
+                } else if (rating >= 6.5) {
+                  ratingColor = AppPalette.gold;
+                } else if (rating > 0.0) {
+                  ratingColor = Colors.orangeAccent;
+                } else {
+                  ratingColor = inkMuted;
+                }
+
+                return TableRow(
+                  decoration: rowColor != null ? BoxDecoration(color: rowColor, borderRadius: BorderRadius.circular(4)) : null,
+                  children: [
+                    rankWidget,
+                    InkWell(
+                      onTap: () => showPlayerDetailSheet(
+                        context,
+                        p,
+                        isCareerMode: true,
+                        careerClubName: _userClub,
+                        careerSeason: _currentSeason,
+                        careerAppearances: apps,
+                        careerGoals: goals,
+                        careerAssists: assists,
+                        careerCleanSheets: cs,
+                        careerAverageRating: rating > 0 ? rating : null,
+                      ),
+                      borderRadius: BorderRadius.circular(4),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                        child: Row(
+                          children: [
+                            PlayerAvatar(name: p.name, size: 20),
+                            const SizedBox(width: 6),
+                            Flexible(
+                              child: Text(
+                                p.name,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontFamily: AppTypography.fontFamily,
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: ink,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    _cell(p.primaryPosition, inkMuted),
+                    _cell('$apps', sortBy == 3 ? AppPalette.gold : ink, isBold: sortBy == 3),
+                    _cell('$goals', sortBy == 0 ? AppPalette.gold : (goals > 0 ? ink : inkMuted), isBold: sortBy == 0 || goals > 0),
+                    _cell('$assists', sortBy == 1 ? AppPalette.gold : (assists > 0 ? ink : inkMuted), isBold: sortBy == 1 || assists > 0),
+                    _cell('$cs', sortBy == 4 ? AppPalette.gold : (cs > 0 ? ink : inkMuted), isBold: sortBy == 4),
+                    _cell(rating > 0 ? rating.toStringAsFixed(2) : '—', ratingColor, isBold: sortBy == 2 || rating >= 7.5),
+                    _cell('$ga', sortBy == 5 ? AppPalette.gold : (ga > 0 ? ink : inkMuted), isBold: sortBy == 5 || ga > 0),
+                  ],
+                );
+              }),
+            ],
+          ),
+      ],
+    );
+  }
+
+  Widget _buildSquadLeaderCard({
+    required String title,
+    required IconData icon,
+    required Player? player,
+    required String statText,
+    required bool isDark,
+    required Color ink,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(8),
+      decoration: BoxDecoration(
+        color: isDark ? AppPalette.darkSurface : AppPalette.lightSurface,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: isDark ? Colors.white10 : Colors.black12),
+      ),
+      child: Row(
+        children: [
+          if (player != null) ...[
+            PlayerAvatar(name: player.name, size: 26),
+            const SizedBox(width: 8),
+          ] else ...[
+            Container(
+              width: 26,
+              height: 26,
+              decoration: BoxDecoration(
+                color: isDark ? Colors.white10 : Colors.black12,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, size: 14, color: AppPalette.gold),
+            ),
+            const SizedBox(width: 8),
+          ],
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Icon(icon, size: 10, color: AppPalette.gold),
+                    const SizedBox(width: 4),
+                    Expanded(
+                      child: Text(
+                        title,
+                        style: const TextStyle(
+                          fontSize: 9,
+                          fontWeight: FontWeight.w700,
+                          color: AppPalette.gold,
+                          letterSpacing: 0.3,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  player?.name ?? 'No entries',
+                  style: TextStyle(
+                    fontFamily: AppTypography.fontFamily,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: ink,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                Text(
+                  statText,
+                  style: TextStyle(
+                    fontFamily: AppTypography.fontFamily,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w800,
+                    color: player != null ? AppPalette.gold : ink.withValues(alpha: 0.5),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSquadStatSortChip(
+    int index,
+    String label,
+    int currentSort,
+    ValueChanged<int> onSortChanged,
+    bool isDark,
+  ) {
+    final isSelected = currentSort == index;
+    return InkWell(
+      onTap: () => onSortChanged(index),
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? AppPalette.gold
+              : (isDark ? AppPalette.darkSurfaceRaised : AppPalette.lightSurfaceRaised),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: isSelected ? AppPalette.gold : (isDark ? Colors.white12 : Colors.black12),
+          ),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 10.5,
+            fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+            color: isSelected ? Colors.black : (isDark ? Colors.white70 : Colors.black87),
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _getCompDisplayName(String compId, {LeagueDefinition? league}) {
+    switch (compId) {
+      case 'league':
+        return league?.name ?? 'League';
+      case 'ucl':
+        return 'UEFA Champions League';
+      case 'fa_cup':
+        return 'FA Cup';
+      case 'carabao_cup':
+        return 'Carabao Cup';
+      default:
+        return 'All Competitions';
+    }
   }
 
   /// Tab 2: Transfers Hub — Transfer Window Card, Enter Market CTA, Inbound Offers & Contracts
@@ -7432,8 +8312,136 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     );
   }
 
-  /// Builds the cumulative league-wide team stats leaderboard (Issue #7 & Fix 22)
+  /// Tab 3 -> Team Stats: Switchable between Squad Player Stats and League Clubs Comparison
   Widget _buildTeamStatsTable(bool isDark, Color ink, Color inkMuted, LeagueDefinition activeLeague) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // Sub-navigation: SQUAD PLAYER STATS vs LEAGUE COMPARISON
+        Container(
+          padding: const EdgeInsets.all(3),
+          margin: const EdgeInsets.only(bottom: 14),
+          decoration: BoxDecoration(
+            color: isDark ? Colors.white.withValues(alpha: 0.05) : Colors.black.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: InkWell(
+                  onTap: () => setState(() => _teamStatsViewMode = 0),
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 9),
+                    decoration: BoxDecoration(
+                      color: _teamStatsViewMode == 0
+                          ? (isDark ? AppPalette.darkSurfaceRaised : AppPalette.lightSurfaceRaised)
+                          : Colors.transparent,
+                      borderRadius: BorderRadius.circular(8),
+                      boxShadow: _teamStatsViewMode == 0
+                          ? [BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 4)]
+                          : null,
+                    ),
+                    alignment: Alignment.center,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.groups_rounded,
+                          size: 15,
+                          color: _teamStatsViewMode == 0 ? AppPalette.gold : inkMuted,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'SQUAD PLAYER STATS',
+                          style: TextStyle(
+                            fontFamily: AppTypography.fontFamily,
+                            fontSize: 11,
+                            fontWeight: _teamStatsViewMode == 0 ? FontWeight.w800 : FontWeight.w600,
+                            color: _teamStatsViewMode == 0 ? AppPalette.gold : inkMuted,
+                            letterSpacing: 0.4,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
+              Expanded(
+                child: InkWell(
+                  onTap: () => setState(() => _teamStatsViewMode = 1),
+                  borderRadius: BorderRadius.circular(8),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 9),
+                    decoration: BoxDecoration(
+                      color: _teamStatsViewMode == 1
+                          ? (isDark ? AppPalette.darkSurfaceRaised : AppPalette.lightSurfaceRaised)
+                          : Colors.transparent,
+                      borderRadius: BorderRadius.circular(8),
+                      boxShadow: _teamStatsViewMode == 1
+                          ? [BoxShadow(color: Colors.black.withValues(alpha: 0.15), blurRadius: 4)]
+                          : null,
+                    ),
+                    alignment: Alignment.center,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.shield_rounded,
+                          size: 15,
+                          color: _teamStatsViewMode == 1 ? AppPalette.gold : inkMuted,
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'LEAGUE COMPARISON',
+                          style: TextStyle(
+                            fontFamily: AppTypography.fontFamily,
+                            fontSize: 11,
+                            fontWeight: _teamStatsViewMode == 1 ? FontWeight.w800 : FontWeight.w600,
+                            color: _teamStatsViewMode == 1 ? AppPalette.gold : inkMuted,
+                            letterSpacing: 0.4,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        if (_teamStatsViewMode == 0) ...[
+          // Competition selector pills
+          _buildCompetitionFilterPills(
+            selectedComp: _teamStatsComp,
+            onSelected: (comp) => setState(() => _teamStatsComp = comp),
+            isDark: isDark,
+            ink: ink,
+            inkMuted: inkMuted,
+            activeLeague: activeLeague,
+          ),
+
+          // Full squad player stats table with podiums & sort chips
+          _buildSquadPlayerStatsTable(
+            isDark: isDark,
+            ink: ink,
+            inkMuted: inkMuted,
+            compKey: _teamStatsComp,
+            sortBy: _teamStatsPlayerSort,
+            onSortChanged: (idx) => setState(() => _teamStatsPlayerSort = idx),
+            showPodiums: true,
+            activeLeague: activeLeague,
+          ),
+        ] else
+          _buildLeagueComparisonTable(isDark, ink, inkMuted, activeLeague),
+      ],
+    );
+  }
+
+  /// Builds the cumulative league-wide team stats leaderboard (Issue #7 & Fix 22)
+  Widget _buildLeagueComparisonTable(bool isDark, Color ink, Color inkMuted, LeagueDefinition activeLeague) {
     // 1. Compile stats for all league clubs
     final List<ClubTeamStats> statsList = [];
     for (final club in _leagueClubs) {
@@ -8340,6 +9348,8 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                 _buildUclSubTab(4, 'ASSISTS', isDark, ink, inkMuted),
                 const SizedBox(width: 4),
                 _buildUclSubTab(5, 'CLEAN SHEETS', isDark, ink, inkMuted),
+                const SizedBox(width: 4),
+                _buildUclSubTab(6, 'MY SQUAD', isDark, ink, inkMuted),
               ],
             ),
           ),
@@ -8355,8 +9365,19 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
           _buildUclScorersView(ucl, isDark, ink, inkMuted)
         else if (_uclViewTab == 4)
           _buildUclAssistsView(ucl, isDark, ink, inkMuted)
+        else if (_uclViewTab == 5)
+          _buildUclCleanSheetsView(ucl, isDark, ink, inkMuted)
         else
-          _buildUclCleanSheetsView(ucl, isDark, ink, inkMuted),
+          _buildSquadPlayerStatsTable(
+            isDark: isDark,
+            ink: ink,
+            inkMuted: inkMuted,
+            compKey: 'ucl',
+            sortBy: _teamStatsPlayerSort,
+            onSortChanged: (idx) => setState(() => _teamStatsPlayerSort = idx),
+            showPodiums: true,
+            activeLeague: activeLeague,
+          ),
       ],
     );
   }
@@ -9580,6 +10601,8 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                 _buildCupSubTab(3, 'ASSISTS', isDark, ink, inkMuted),
                 const SizedBox(width: 4),
                 _buildCupSubTab(4, 'CLEAN SHEETS', isDark, ink, inkMuted),
+                const SizedBox(width: 4),
+                _buildCupSubTab(5, 'MY SQUAD', isDark, ink, inkMuted),
               ],
             ),
           ),
@@ -9593,8 +10616,19 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
           _buildCupScorersView(currentCup, isDark, ink, inkMuted)
         else if (_cupViewTab == 3)
           _buildCupAssistsView(currentCup, isDark, ink, inkMuted)
+        else if (_cupViewTab == 4)
+          _buildCupCleanSheetsView(currentCup, isDark, ink, inkMuted)
         else
-          _buildCupCleanSheetsView(currentCup, isDark, ink, inkMuted),
+          _buildSquadPlayerStatsTable(
+            isDark: isDark,
+            ink: ink,
+            inkMuted: inkMuted,
+            compKey: _cupSelectedId == 0 ? 'fa_cup' : 'carabao_cup',
+            sortBy: _teamStatsPlayerSort,
+            onSortChanged: (idx) => setState(() => _teamStatsPlayerSort = idx),
+            showPodiums: true,
+            activeLeague: activeLeague,
+          ),
       ],
     );
   }

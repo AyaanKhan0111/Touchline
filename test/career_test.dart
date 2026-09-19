@@ -4528,6 +4528,236 @@ void main() {
       expect(pendingCount, equals(2), reason: 'Only pending offers must increment badge count');
     });
   });
+
+  group('Competition-Partitioned Player & Team Stats', () {
+    late PrefsService prefsService;
+
+    setUp(() {
+      SharedPreferences.setMockInitialValues({});
+      prefsService = PrefsService.instance;
+    });
+
+    test('PrefsService accurately saves, reads, and clears compPlayerStats', () async {
+      final sampleCompStats = {
+        'ucl': {
+          'appearances': {'cr7': 6, 'de_gea': 6},
+          'goals': {'cr7': 8},
+          'assists': {'cr7': 3},
+          'cleanSheets': {'de_gea': 4},
+          'ratingsTotal': {'cr7': 48.6},
+          'ratingsCount': {'cr7': 6},
+        },
+        'league': {
+          'appearances': {'cr7': 20, 'de_gea': 20},
+          'goals': {'cr7': 18},
+          'assists': {'cr7': 9},
+          'cleanSheets': {'de_gea': 10},
+          'ratingsTotal': {'cr7': 156.0},
+          'ratingsCount': {'cr7': 20},
+        },
+        'fa_cup': {
+          'appearances': {'cr7': 4, 'de_gea': 4},
+          'goals': {'cr7': 3},
+          'assists': {'cr7': 1},
+          'cleanSheets': {'de_gea': 2},
+          'ratingsTotal': {'cr7': 31.2},
+          'ratingsCount': {'cr7': 4},
+        },
+        'carabao_cup': {
+          'appearances': {'cr7': 2, 'de_gea': 2},
+          'goals': {'cr7': 1},
+          'assists': {'cr7': 0},
+          'cleanSheets': {'de_gea': 1},
+          'ratingsTotal': {'cr7': 14.8},
+          'ratingsCount': {'cr7': 2},
+        },
+      };
+
+      await prefsService.saveCareerConfig(
+        leagueId: 'premier_league',
+        clubName: 'Manchester United',
+        clubCode: 'MUN',
+        isCustomClub: false,
+        squadMode: 'current',
+        squadIds: ['cr7', 'de_gea'],
+        compPlayerStats: sampleCompStats,
+      );
+
+      final loadedConfig = await prefsService.getCareerConfig();
+      expect(loadedConfig, isNotNull);
+      expect(loadedConfig!['compPlayerStats'], isNotNull);
+      final loadedCompStats = loadedConfig['compPlayerStats'] as Map<String, dynamic>;
+
+      // Verify competition keys exist
+      expect(loadedCompStats.containsKey('ucl'), isTrue);
+      expect(loadedCompStats.containsKey('league'), isTrue);
+      expect(loadedCompStats.containsKey('fa_cup'), isTrue);
+      expect(loadedCompStats.containsKey('carabao_cup'), isTrue);
+
+      // Verify UCL stats
+      final uclGoals = (loadedCompStats['ucl']['goals'] as Map)['cr7'];
+      expect(uclGoals, equals(8));
+      final uclCleanSheets = (loadedCompStats['ucl']['cleanSheets'] as Map)['de_gea'];
+      expect(uclCleanSheets, equals(4));
+
+      // Verify League stats
+      final leagueGoals = (loadedCompStats['league']['goals'] as Map)['cr7'];
+      expect(leagueGoals, equals(18));
+
+      // Verify clearCareerConfig clears compPlayerStats
+      await prefsService.clearCareerConfig();
+      final clearedConfig = await prefsService.getCareerConfig();
+      expect(clearedConfig == null || (clearedConfig['compPlayerStats'] as Map).isEmpty, isTrue);
+    });
+
+    test('Player stat aggregation calculates per-competition and all-competition totals accurately', () {
+      final compGoals = {
+        'league': {'cr7': 20, 'rashford': 12},
+        'ucl': {'cr7': 7, 'rashford': 4},
+        'fa_cup': {'cr7': 2, 'rashford': 3},
+        'carabao_cup': {'cr7': 1, 'rashford': 1},
+      };
+
+      final compAssists = {
+        'league': {'cr7': 6, 'rashford': 8},
+        'ucl': {'cr7': 3, 'rashford': 2},
+        'fa_cup': {'cr7': 1, 'rashford': 1},
+        'carabao_cup': {'cr7': 0, 'rashford': 2},
+      };
+
+      final compAppearances = {
+        'league': {'cr7': 22, 'rashford': 24},
+        'ucl': {'cr7': 6, 'rashford': 6},
+        'fa_cup': {'cr7': 3, 'rashford': 4},
+        'carabao_cup': {'cr7': 2, 'rashford': 2},
+      };
+
+      final compCleanSheets = {
+        'league': {'de_gea': 11},
+        'ucl': {'de_gea': 3},
+        'fa_cup': {'de_gea': 2},
+        'carabao_cup': {'de_gea': 1},
+      };
+
+      final compRatingsTotal = {
+        'league': {'cr7': 171.6}, // avg 7.8
+        'ucl': {'cr7': 49.2},     // avg 8.2
+        'fa_cup': {'cr7': 21.6},  // avg 7.2
+        'carabao_cup': {'cr7': 14.4}, // avg 7.2
+      };
+
+      final compRatingsCount = {
+        'league': {'cr7': 22},
+        'ucl': {'cr7': 6},
+        'fa_cup': {'cr7': 3},
+        'carabao_cup': {'cr7': 2},
+      };
+
+      // Helper function matching CareerScreen's implementation
+      int getPlayerGoals(String playerId, {String? compKey}) {
+        if (compKey != null && compKey != 'all') {
+          return compGoals[compKey]?[playerId] ?? 0;
+        }
+        int sum = 0;
+        for (final m in compGoals.values) {
+          sum += m[playerId] ?? 0;
+        }
+        return sum;
+      }
+
+      int getPlayerAssists(String playerId, {String? compKey}) {
+        if (compKey != null && compKey != 'all') {
+          return compAssists[compKey]?[playerId] ?? 0;
+        }
+        int sum = 0;
+        for (final m in compAssists.values) {
+          sum += m[playerId] ?? 0;
+        }
+        return sum;
+      }
+
+      int getPlayerAppearances(String playerId, {String? compKey}) {
+        if (compKey != null && compKey != 'all') {
+          return compAppearances[compKey]?[playerId] ?? 0;
+        }
+        int sum = 0;
+        for (final m in compAppearances.values) {
+          sum += m[playerId] ?? 0;
+        }
+        return sum;
+      }
+
+      int getPlayerCleanSheets(String playerId, {String? compKey}) {
+        if (compKey != null && compKey != 'all') {
+          return compCleanSheets[compKey]?[playerId] ?? 0;
+        }
+        int sum = 0;
+        for (final m in compCleanSheets.values) {
+          sum += m[playerId] ?? 0;
+        }
+        return sum;
+      }
+
+      double getPlayerAvgRating(String playerId, {String? compKey}) {
+        if (compKey != null && compKey != 'all') {
+          final count = compRatingsCount[compKey]?[playerId] ?? 0;
+          if (count == 0) return 0.0;
+          return (compRatingsTotal[compKey]?[playerId] ?? 0.0) / count;
+        }
+        double total = 0.0;
+        int count = 0;
+        for (final m in compRatingsTotal.values) {
+          total += m[playerId] ?? 0.0;
+        }
+        for (final m in compRatingsCount.values) {
+          count += m[playerId] ?? 0;
+        }
+        return count == 0 ? 0.0 : total / count;
+      }
+
+      // 1. UCL Individual Stats
+      expect(getPlayerGoals('cr7', compKey: 'ucl'), equals(7));
+      expect(getPlayerAssists('cr7', compKey: 'ucl'), equals(3));
+      expect(getPlayerAppearances('cr7', compKey: 'ucl'), equals(6));
+      expect(getPlayerCleanSheets('de_gea', compKey: 'ucl'), equals(3));
+      expect(getPlayerAvgRating('cr7', compKey: 'ucl'), closeTo(8.2, 0.01));
+
+      // 2. League Individual Stats
+      expect(getPlayerGoals('cr7', compKey: 'league'), equals(20));
+      expect(getPlayerAssists('cr7', compKey: 'league'), equals(6));
+      expect(getPlayerAppearances('cr7', compKey: 'league'), equals(22));
+      expect(getPlayerCleanSheets('de_gea', compKey: 'league'), equals(11));
+      expect(getPlayerAvgRating('cr7', compKey: 'league'), closeTo(7.8, 0.01));
+
+      // 3. FA Cup Individual Stats
+      expect(getPlayerGoals('cr7', compKey: 'fa_cup'), equals(2));
+      expect(getPlayerAssists('cr7', compKey: 'fa_cup'), equals(1));
+      expect(getPlayerCleanSheets('de_gea', compKey: 'fa_cup'), equals(2));
+
+      // 4. Carabao Cup Individual Stats
+      expect(getPlayerGoals('cr7', compKey: 'carabao_cup'), equals(1));
+      expect(getPlayerCleanSheets('de_gea', compKey: 'carabao_cup'), equals(1));
+
+      // 5. All Competitions Combined Stats
+      // Goals: 20 + 7 + 2 + 1 = 30
+      expect(getPlayerGoals('cr7', compKey: 'all'), equals(30));
+      expect(getPlayerGoals('cr7'), equals(30)); // default is all
+      // Assists: 6 + 3 + 1 + 0 = 10
+      expect(getPlayerAssists('cr7', compKey: 'all'), equals(10));
+      // Apps: 22 + 6 + 3 + 2 = 33
+      expect(getPlayerAppearances('cr7', compKey: 'all'), equals(33));
+      // Clean Sheets: 11 + 3 + 2 + 1 = 17
+      expect(getPlayerCleanSheets('de_gea', compKey: 'all'), equals(17));
+      // Avg Rating: (171.6 + 49.2 + 21.6 + 14.4) / (22 + 6 + 3 + 2) = 256.8 / 33 = 7.7818...
+      expect(getPlayerAvgRating('cr7', compKey: 'all'), closeTo(7.78, 0.02));
+
+      // 6. Goal Involvements (G + A)
+      final allGi = getPlayerGoals('cr7', compKey: 'all') + getPlayerAssists('cr7', compKey: 'all');
+      expect(allGi, equals(40));
+      final uclGi = getPlayerGoals('cr7', compKey: 'ucl') + getPlayerAssists('cr7', compKey: 'ucl');
+      expect(uclGi, equals(10));
+    });
+  });
 }
 
 

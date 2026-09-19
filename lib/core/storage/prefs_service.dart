@@ -140,6 +140,7 @@ class PrefsService {
   static const _keyCareerPlayerContracts = 'career_player_contracts';
   static const _keyCareerCustomFormationSlots = 'career_custom_formation_slots';
   static const _keyCareerAiClubSquads = 'career_ai_club_squads';
+  static const _keyCareerCompPlayerStats = 'career_comp_player_stats';
 
   Future<Map<String, dynamic>?> getCareerConfig() async {
     final p = await prefs;
@@ -365,6 +366,14 @@ class PrefsService {
       } catch (_) {}
     }
 
+    final compStatsRaw = p.getString(_keyCareerCompPlayerStats);
+    Map<String, dynamic> compPlayerStats = {};
+    if (compStatsRaw != null) {
+      try {
+        compPlayerStats = jsonDecode(compStatsRaw) as Map<String, dynamic>;
+      } catch (_) {}
+    }
+
     return {
       'leagueId': p.getString(_keyCareerLeagueId) ?? 'premier_league',
       'clubName': clubName,
@@ -378,6 +387,7 @@ class PrefsService {
       'winterBudgetAwarded': p.getBool(_keyCareerWinterBudgetAwarded) ?? false,
       'squadIds': p.getStringList(_keyCareerSquadIds) ?? <String>[],
       'playerStats': playerStats,
+      'compPlayerStats': compPlayerStats,
       'recentResults': recentResults,
       'leagueScorers': leagueScorers,
       'leagueTable': leagueTable,
@@ -418,6 +428,7 @@ class PrefsService {
     bool winterBudgetAwarded = false,
     List<String> squadIds = const [],
     Map<String, Map<String, int>>? playerStats,
+    Map<String, dynamic>? compPlayerStats,
     List<Map<String, dynamic>>? recentResults,
     List<Map<String, dynamic>>? recentUclResults,
     List<Map<String, dynamic>>? recentFaCupResults,
@@ -457,6 +468,9 @@ class PrefsService {
     await p.setStringList(_keyCareerSquadIds, squadIds);
     if (playerStats != null) {
       await p.setString(_keyCareerPlayerStats, jsonEncode(playerStats));
+    }
+    if (compPlayerStats != null) {
+      await p.setString(_keyCareerCompPlayerStats, jsonEncode(compPlayerStats));
     }
     if (recentResults != null) {
       await p.setString(_keyCareerRecentResults, jsonEncode(recentResults));
@@ -573,5 +587,6 @@ class PrefsService {
     await p.remove(_keyCareerPlayerContracts);
     await p.remove(_keyCareerCustomFormationSlots);
     await p.remove(_keyCareerAiClubSquads);
+    await p.remove(_keyCareerCompPlayerStats);
   }
 }
