@@ -135,6 +135,7 @@ class PrefsService {
   static const _keyCareerRecentCarabaoResults = 'career_recent_carabao_results';
   static const _keyCareerPlayerRatingsOverride = 'career_player_ratings_override';
   static const _keyCareerPlayerAgesOverride = 'career_player_ages_override';
+  static const _keyCareerPendingTransferOffers = 'career_pending_transfer_offers';
 
   Future<Map<String, dynamic>?> getCareerConfig() async {
     final p = await prefs;
@@ -316,6 +317,15 @@ class PrefsService {
       } catch (_) {}
     }
 
+    final offersRaw = p.getString(_keyCareerPendingTransferOffers);
+    List<Map<String, dynamic>> pendingTransferOffers = [];
+    if (offersRaw != null) {
+      try {
+        final decoded = jsonDecode(offersRaw) as List<dynamic>;
+        pendingTransferOffers = decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      } catch (_) {}
+    }
+
     return {
       'leagueId': p.getString(_keyCareerLeagueId) ?? 'premier_league',
       'clubName': clubName,
@@ -348,6 +358,7 @@ class PrefsService {
       'recentCarabaoResults': recentCarabaoResults,
       'playerRatingsOverride': playerRatingsOverride,
       'playerAgesOverride': playerAgesOverride,
+      'pendingTransferOffers': pendingTransferOffers,
     };
   }
 
@@ -383,6 +394,7 @@ class PrefsService {
     Map<String, int>? leagueClubRatingCounts,
     Map<String, int>? playerRatingsOverride,
     Map<String, int>? playerAgesOverride,
+    List<Map<String, dynamic>>? pendingTransferOffers,
   }) async {
     final p = await prefs;
     await p.setString(_keyCareerLeagueId, leagueId);
@@ -457,6 +469,9 @@ class PrefsService {
     if (playerAgesOverride != null) {
       await p.setString(_keyCareerPlayerAgesOverride, jsonEncode(playerAgesOverride));
     }
+    if (pendingTransferOffers != null) {
+      await p.setString(_keyCareerPendingTransferOffers, jsonEncode(pendingTransferOffers));
+    }
   }
 
   Future<void> clearCareerConfig() async {
@@ -494,5 +509,6 @@ class PrefsService {
     await p.remove(_keyCareerLeagueClubRatingCounts);
     await p.remove(_keyCareerPlayerRatingsOverride);
     await p.remove(_keyCareerPlayerAgesOverride);
+    await p.remove(_keyCareerPendingTransferOffers);
   }
 }

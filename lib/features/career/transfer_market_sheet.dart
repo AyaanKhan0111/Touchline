@@ -16,6 +16,8 @@ class TransferMarketSheet extends StatefulWidget {
   final String windowTitle;
   final List<Player> userSquad;
   final Function(Player player, double fee) onSignPlayer;
+  final int pendingOffersCount;
+  final VoidCallback? onViewOffers;
 
   const TransferMarketSheet({
     super.key,
@@ -24,6 +26,8 @@ class TransferMarketSheet extends StatefulWidget {
     required this.windowTitle,
     required this.userSquad,
     required this.onSignPlayer,
+    this.pendingOffersCount = 0,
+    this.onViewOffers,
   });
 
   @override
@@ -288,6 +292,40 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
                     ],
                   ),
                 ),
+                if (widget.pendingOffersCount > 0) ...[
+                  InkWell(
+                    onTap: () {
+                      Navigator.pop(context);
+                      widget.onViewOffers?.call();
+                    },
+                    borderRadius: BorderRadius.circular(16),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: AppPalette.gold.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: AppPalette.gold.withValues(alpha: 0.5)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.mark_email_unread_rounded, size: 13, color: AppPalette.gold),
+                          const SizedBox(width: 4),
+                          Text(
+                            '${widget.pendingOffersCount} BIDS',
+                            style: const TextStyle(
+                              fontFamily: AppTypography.bodyFamily,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w800,
+                              color: AppPalette.gold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                ],
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(

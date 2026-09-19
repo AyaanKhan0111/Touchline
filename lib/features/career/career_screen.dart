@@ -23,6 +23,9 @@ import 'match_detail_sheet.dart';
 import '../../domain/services/ucl_engine.dart';
 import '../../domain/services/cup_engine.dart';
 import '../../domain/services/player_growth_service.dart';
+import '../../domain/models/transfer_offer.dart';
+import '../../domain/services/transfer_offer_service.dart';
+import 'inbound_offers_sheet.dart';
 
 class LeagueDefinition {
   final String id;
@@ -482,6 +485,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
   bool _winterBudgetAwarded = false;
   double _budgetMillions = 85.0;
   double _careerPrizeMoneyEarned = 0.0;
+  final List<TransferOffer> _pendingTransferOffers = [];
 
   List<String> _leagueClubs = [];
   List<Player> _userSquad = [];
@@ -918,6 +922,17 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
 
     // Generate balanced round-robin fixture calendar (Issue #12)
     _seasonSchedule = generateSeasonSchedule(_leagueClubs, totalGameweeks: _totalGameweeks);
+
+    // Restore pending inbound transfer offers (Fix 28 / User Fix 6)
+    _pendingTransferOffers.clear();
+    final savedOffers = saved['pendingTransferOffers'] as List<dynamic>? ?? [];
+    for (final o in savedOffers) {
+      try {
+        if (o is Map) {
+          _pendingTransferOffers.add(TransferOffer.fromMap(Map<String, dynamic>.from(o)));
+        }
+      } catch (_) {}
+    }
 
     // Pre-cache authentic AI club squads for realistic match reports
     await _cacheLeagueClubSquads(db);
@@ -1367,6 +1382,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     _recentUclResults.clear();
     _recentFaCupResults.clear();
     _recentCarabaoResults.clear();
+    _pendingTransferOffers.clear();
     _playerAppearances.clear();
     _playerGoals.clear();
     _playerAssists.clear();
@@ -1825,11 +1841,29 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       _careerPrizeMoneyEarned += matchBonus;
     }
 
+    // Evaluate inbound transfer offers if window is open (Fix 28 / User Fix 6)
+    final windowState = TransferWindowState.compute(
+      gameweek: _currentGameweek,
+      totalGameweeks: _totalGameweeks,
+    );
+    final newInboundBids = TransferOfferService.evaluateMatchdayInboundBids(
+      userSquad: _userSquad,
+      userClub: _userClub,
+      season: _currentSeason,
+      gameweek: _currentGameweek,
+      isWindowOpen: windowState.isOpen,
+      currentPendingOffers: _pendingTransferOffers,
+      valuationCalculator: calculatePlayerValuation,
+    );
+
     setState(() {
       _seasonResultsArchive[_currentGameweek] = List<MatchResult>.from(resultsThisWeek);
       _currentGameweek = nextGw;
       _recentResults.clear();
       _recentResults.addAll(resultsThisWeek);
+      if (newInboundBids.isNotEmpty) {
+        _pendingTransferOffers.addAll(newInboundBids);
+      }
     });
 
     // Persist gameweek, table, player statistics, clean sheets, and league scorers (Issue #7, #8, #11, #12)
@@ -1862,6 +1896,36 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                 ),
               ),
             ],
+          ),
+        ),
+      );
+    }
+
+    if (newInboundBids.isNotEmpty && mounted) {
+      final firstBid = newInboundBids.first;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 4),
+          backgroundColor: AppPalette.gold,
+          content: Row(
+            children: [
+              const Icon(Icons.mark_email_unread_rounded, color: Colors.black, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'INBOUND BID: ${firstBid.buyingClub} offered £${firstBid.offeredFeeMillions.toStringAsFixed(1)}M for ${firstBid.playerName}!',
+                  style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.black, fontSize: 12.5),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          action: SnackBarAction(
+            label: 'REVIEW',
+            textColor: Colors.black,
+            backgroundColor: Colors.white,
+            onPressed: _openInboundOffersSheet,
           ),
         ),
       );
@@ -1908,6 +1972,8 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       }
     }
 
+    final pendingOffersList = _pendingTransferOffers.map((o) => o.toMap()).toList();
+
     // 1. Save to SharedPreferences (fast local cache)
     await PrefsService.instance.saveCareerConfig(
       leagueId: _leagueId,
@@ -1941,6 +2007,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       leagueClubRatingCounts: _leagueClubRatingCounts,
       playerRatingsOverride: ratingsOverride,
       playerAgesOverride: agesOverride,
+      pendingTransferOffers: pendingOffersList,
     );
 
     final statePayload = <String, dynamic>{
@@ -1978,6 +2045,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       'leagueClubRatingCounts': _leagueClubRatingCounts,
       'playerRatingsOverride': ratingsOverride,
       'playerAgesOverride': agesOverride,
+      'pendingTransferOffers': pendingOffersList,
     };
 
     // 2. Dual-layer persistence: SQLite touchline_save.db career_save table (Issue #10)
@@ -2561,7 +2629,97 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     );
   }
 
-  /// Opens the Transfer Market & Scouting sheet (Issue #9)
+  /// Opens the inbound AI transfer offers bottom sheet (Fix 28 / User Fix 6)
+  void _openInboundOffersSheet() {
+    SoundService.instance.playClick();
+    showInboundOffersSheet(
+      context,
+      offers: _pendingTransferOffers,
+      userSquad: _userSquad,
+      onAccept: _acceptTransferOffer,
+      onRefuse: _refuseTransferOffer,
+    );
+  }
+
+  /// Accepts an incoming AI club transfer bid, selling the player for the offered fee (Fix 28 / User Fix 6)
+  void _acceptTransferOffer(TransferOffer offer) {
+    if (_userSquad.length <= 11) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          backgroundColor: AppPalette.red,
+          content: Text('Cannot sell: Squad must maintain at least 11 registered players.'),
+        ),
+      );
+      return;
+    }
+
+    final playerIndex = _userSquad.indexWhere(
+      (p) => p.name.trim().toLowerCase() == offer.playerName.trim().toLowerCase(),
+    );
+
+    if (playerIndex == -1) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: AppPalette.red,
+          content: Text('${offer.playerName} is no longer in your squad.'),
+        ),
+      );
+      return;
+    }
+
+    final player = _userSquad[playerIndex];
+    if (player.primaryPosition == 'GK' || player.isGoalkeeper) {
+      final gks = _userSquad.where((p) => p.primaryPosition == 'GK' || p.isGoalkeeper).length;
+      if (gks <= 1) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            backgroundColor: AppPalette.red,
+            content: Text('Cannot sell: Squad must retain at least one Goalkeeper.'),
+          ),
+        );
+        return;
+      }
+    }
+
+    SoundService.instance.playGoal();
+    setState(() {
+      _budgetMillions += offer.offeredFeeMillions;
+      _userSquad.removeAt(playerIndex);
+      _pendingTransferOffers.removeWhere((o) => o.id == offer.id);
+    });
+    _persistCareerState();
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: AppPalette.green,
+        content: Text(
+          'Deal Agreed! ${offer.playerName} transferred to ${offer.buyingClub} for +£${offer.offeredFeeMillions.toStringAsFixed(1)}M!',
+          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+        ),
+      ),
+    );
+  }
+
+  /// Rejects an incoming AI club transfer bid (Fix 28 / User Fix 6)
+  void _refuseTransferOffer(TransferOffer offer) {
+    SoundService.instance.playClick();
+    setState(() {
+      _pendingTransferOffers.removeWhere((o) => o.id == offer.id);
+    });
+    _persistCareerState();
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: AppPalette.red,
+        content: Text(
+          'Bid Refused: £${offer.offeredFeeMillions.toStringAsFixed(1)}M offer from ${offer.buyingClub} for ${offer.playerName} rejected.',
+          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+        ),
+      ),
+    );
+  }
+
+  /// Opens the Transfer Market & Scouting sheet (Issue #9 & Fix 28)
   void _openTransferMarket() {
     SoundService.instance.playClick();
     final windowState = TransferWindowState.compute(
@@ -2578,6 +2736,8 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         isWindowOpen: windowState.isOpen,
         windowTitle: windowState.title,
         userSquad: _userSquad,
+        pendingOffersCount: _pendingTransferOffers.where((o) => o.isPending).length,
+        onViewOffers: _openInboundOffersSheet,
         onSignPlayer: (player, fee) {
           SoundService.instance.playCorrect();
           setState(() {
@@ -2989,6 +3149,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                   _recentUclResults.clear();
                   _recentFaCupResults.clear();
                   _recentCarabaoResults.clear();
+                  _pendingTransferOffers.clear();
                   _playerAppearances.clear();
                   _playerGoals.clear();
                   _playerAssists.clear();
@@ -4798,6 +4959,49 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
               ),
             ],
           ),
+          if (_pendingTransferOffers.where((o) => o.isPending).isNotEmpty) ...[
+            const SizedBox(height: 10),
+            InkWell(
+              onTap: _openInboundOffersSheet,
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: AppPalette.gold.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppPalette.gold.withValues(alpha: 0.4)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.mark_email_unread_rounded, color: AppPalette.gold, size: 20),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        '${_pendingTransferOffers.where((o) => o.isPending).length} Inbound Transfer Bids Received!',
+                        style: const TextStyle(
+                          fontFamily: AppTypography.fontFamily,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                          color: AppPalette.gold,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    const Text(
+                      'REVIEW BIDS ➔',
+                      style: TextStyle(
+                        fontFamily: AppTypography.fontFamily,
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w900,
+                        color: AppPalette.gold,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 10),
           SizedBox(
             width: double.infinity,

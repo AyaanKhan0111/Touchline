@@ -9,6 +9,8 @@ import 'package:touchline/domain/services/sim_engine.dart';
 import 'package:touchline/domain/services/ucl_engine.dart';
 import 'package:touchline/domain/services/cup_engine.dart';
 import 'package:touchline/domain/services/player_growth_service.dart';
+import 'package:touchline/domain/models/transfer_offer.dart';
+import 'package:touchline/domain/services/transfer_offer_service.dart';
 import 'package:touchline/features/career/career_screen.dart';
 import 'package:touchline/features/career/formation_editor.dart';
 
@@ -2673,6 +2675,288 @@ void main() {
       expect(loadedRatings['Casemiro'], 83);
       expect(loadedAges['Kobbie Mainoo'], 20);
       expect(loadedAges['Casemiro'], 34);
+
+      await prefs.clearCareerConfig();
+      final cleared = await prefs.getCareerConfig();
+      expect(cleared, isNull);
+    });
+  });
+
+  group('Fix 28: Inbound AI Club Transfer Offers & Bids', () {
+    test('TransferOffer model serializes and deserializes accurately with all computed properties', () {
+      final now = DateTime.now();
+      final offer = TransferOffer(
+        id: 'offer_1_5_Bruno_1234',
+        playerName: 'Bruno Fernandes',
+        playerPosition: 'CAM',
+        playerOverall: 88,
+        playerAge: 30,
+        buyingClub: 'Real Madrid',
+        buyingClubTier: 'Tier 1 (Elite Mega Club)',
+        playerMarketValue: 70.0,
+        offeredFeeMillions: 85.5,
+        season: 1,
+        gameweek: 5,
+        status: 'pending',
+        date: now,
+      );
+
+      expect(offer.isPending, isTrue);
+      expect(offer.isAccepted, isFalse);
+      expect(offer.isRejected, isFalse);
+      expect(offer.premiumPercent, closeTo(22.1, 0.2));
+
+      final map = offer.toMap();
+      final fromMap = TransferOffer.fromMap(map);
+
+      expect(fromMap.id, offer.id);
+      expect(fromMap.playerName, offer.playerName);
+      expect(fromMap.playerPosition, offer.playerPosition);
+      expect(fromMap.playerOverall, offer.playerOverall);
+      expect(fromMap.playerAge, offer.playerAge);
+      expect(fromMap.buyingClub, offer.buyingClub);
+      expect(fromMap.buyingClubTier, offer.buyingClubTier);
+      expect(fromMap.playerMarketValue, offer.playerMarketValue);
+      expect(fromMap.offeredFeeMillions, offer.offeredFeeMillions);
+      expect(fromMap.season, offer.season);
+      expect(fromMap.gameweek, offer.gameweek);
+      expect(fromMap.status, 'pending');
+
+      final acceptedOffer = offer.copyWith(status: 'accepted');
+      expect(acceptedOffer.isAccepted, isTrue);
+      expect(acceptedOffer.isPending, isFalse);
+
+      final rejectedOffer = offer.copyWith(status: 'rejected');
+      expect(rejectedOffer.isRejected, isTrue);
+      expect(rejectedOffer.isPending, isFalse);
+    });
+
+    test('Superstars (85+ OVR) can strictly ONLY be approached by Tier 1 Elite Clubs', () {
+      final ronaldo = Player.fromMap({
+        'player_name': 'Cristiano Ronaldo',
+        'overall': 86,
+        'age': 39.0,
+        'primary_position': 'ST',
+        'all_positions': 'ST',
+        'mode': 'FC24',
+        'season': 2024,
+        'team_name': 'Al Nassr',
+      });
+
+      final haaland = Player.fromMap({
+        'player_name': 'Erling Haaland',
+        'overall': 91,
+        'age': 24.0,
+        'primary_position': 'ST',
+        'all_positions': 'ST',
+        'mode': 'FC24',
+        'season': 2024,
+        'team_name': 'Manchester City',
+      });
+
+      // Tier 1 mega clubs MUST be eligible
+      for (final club in TransferOfferService.kTier1Clubs) {
+        expect(
+          TransferOfferService.canClubApproachPlayer(club: club, player: ronaldo, userClub: 'Manchester United'),
+          isTrue,
+          reason: '$club should be able to approach 86-rated superstar Ronaldo',
+        );
+        expect(
+          TransferOfferService.canClubApproachPlayer(club: club, player: haaland, userClub: 'Manchester United'),
+          isTrue,
+          reason: '$club should be able to approach 91-rated superstar Haaland',
+        );
+      }
+
+      // Tier 4, Tier 3, and Tier 2 clubs MUST NOT be eligible to bid for 85+ superstars
+      final ineligibleClubs = [
+        'Brentford',
+        'AFC Bournemouth',
+        'Nottingham Forest',
+        'Leicester City',
+        'Ipswich Town',
+        'West Ham United',
+        'Brighton & Hove Albion',
+        'Everton',
+        'Chelsea',
+        'Tottenham Hotspur',
+      ];
+
+      for (final club in ineligibleClubs) {
+        expect(
+          TransferOfferService.canClubApproachPlayer(club: club, player: ronaldo, userClub: 'Manchester United'),
+          isFalse,
+          reason: '$club should NOT be able to afford or approach 86-rated superstar Ronaldo',
+        );
+      }
+
+      // User club itself is always excluded
+      expect(
+        TransferOfferService.canClubApproachPlayer(club: 'Real Madrid', player: ronaldo, userClub: 'Real Madrid'),
+        isFalse,
+      );
+    });
+
+    test('Mid-tier players (74-79 OVR) and low-tier (<74) are approached by appropriate tiers', () {
+      final midTierPlayer = Player.fromMap({
+        'player_name': 'Solid Starter',
+        'overall': 76,
+        'age': 25.0,
+        'primary_position': 'CM',
+        'all_positions': 'CM',
+        'mode': 'FC24',
+        'season': 2024,
+        'team_name': 'Everton',
+      });
+
+      // Tier 2, 3, 4 can approach 76 OVR
+      expect(TransferOfferService.canClubApproachPlayer(club: 'Chelsea', player: midTierPlayer, userClub: 'Everton'), isTrue);
+      expect(TransferOfferService.canClubApproachPlayer(club: 'West Ham United', player: midTierPlayer, userClub: 'Everton'), isTrue);
+      expect(TransferOfferService.canClubApproachPlayer(club: 'Brentford', player: midTierPlayer, userClub: 'Everton'), isTrue);
+
+      final youthProspect = Player.fromMap({
+        'player_name': 'Young Fringe',
+        'overall': 71,
+        'age': 19.0,
+        'primary_position': 'RW',
+        'all_positions': 'RW',
+        'mode': 'FC24',
+        'season': 2024,
+        'team_name': 'Everton',
+      });
+
+      // <74 approached by Tier 3 & 4
+      expect(TransferOfferService.canClubApproachPlayer(club: 'Brentford', player: youthProspect, userClub: 'Everton'), isTrue);
+      expect(TransferOfferService.canClubApproachPlayer(club: 'Brighton & Hove Albion', player: youthProspect, userClub: 'Everton'), isTrue);
+    });
+
+    test('Offered transfer fee provides realistic premium over player valuation', () {
+      final player = Player.fromMap({
+        'player_name': 'Bukayo Saka',
+        'overall': 87,
+        'age': 22.0,
+        'potential': 90.0,
+        'primary_position': 'RW',
+        'all_positions': 'RW',
+        'mode': 'FC24',
+        'season': 2024,
+        'team_name': 'Arsenal',
+      });
+
+      const valuation = 80.0;
+      final offer = TransferOfferService.generateOfferForPlayer(
+        player: player,
+        playerMarketValue: valuation,
+        userClub: 'Arsenal',
+        season: 1,
+        gameweek: 3,
+      );
+
+      expect(offer, isNotNull);
+      expect(offer!.offeredFeeMillions, greaterThan(valuation));
+      expect(offer.premiumPercent, greaterThanOrEqualTo(5.0));
+      expect(TransferOfferService.kTier1Clubs.contains(offer.buyingClub), isTrue);
+      expect(offer.buyingClub, isNot('Arsenal'));
+    });
+
+    test('evaluateMatchdayInboundBids enforces window status and maximum pending offers', () {
+      final squad = [
+        Player.fromMap({'player_name': 'Player 1', 'overall': 82, 'age': 25.0, 'primary_position': 'ST', 'mode': 'FC24', 'season': 2024, 'team_name': 'Chelsea'}),
+        Player.fromMap({'player_name': 'Player 2', 'overall': 85, 'age': 26.0, 'primary_position': 'CB', 'mode': 'FC24', 'season': 2024, 'team_name': 'Chelsea'}),
+        Player.fromMap({'player_name': 'Player 3', 'overall': 78, 'age': 22.0, 'primary_position': 'CM', 'mode': 'FC24', 'season': 2024, 'team_name': 'Chelsea'}),
+      ];
+
+      // Closed window: returns empty
+      final closedOffers = TransferOfferService.evaluateMatchdayInboundBids(
+        userSquad: squad,
+        userClub: 'Chelsea',
+        season: 1,
+        gameweek: 15,
+        isWindowOpen: false,
+        currentPendingOffers: [],
+        valuationCalculator: (p) => 40.0,
+      );
+      expect(closedOffers, isEmpty);
+
+      // Max pending offers reached (>= 3): returns empty
+      final mockPending = [
+        TransferOffer(id: '1', playerName: 'P1', playerPosition: 'ST', playerOverall: 80, playerAge: 25, buyingClub: 'Real Madrid', buyingClubTier: 'Tier 1', playerMarketValue: 30, offeredFeeMillions: 35, season: 1, gameweek: 1, status: 'pending', date: DateTime.now()),
+        TransferOffer(id: '2', playerName: 'P2', playerPosition: 'CB', playerOverall: 80, playerAge: 25, buyingClub: 'Bayern Munich', buyingClubTier: 'Tier 1', playerMarketValue: 30, offeredFeeMillions: 35, season: 1, gameweek: 1, status: 'pending', date: DateTime.now()),
+        TransferOffer(id: '3', playerName: 'P3', playerPosition: 'CM', playerOverall: 80, playerAge: 25, buyingClub: 'PSG', buyingClubTier: 'Tier 1', playerMarketValue: 30, offeredFeeMillions: 35, season: 1, gameweek: 1, status: 'pending', date: DateTime.now()),
+      ];
+      final cappedOffers = TransferOfferService.evaluateMatchdayInboundBids(
+        userSquad: squad,
+        userClub: 'Chelsea',
+        season: 1,
+        gameweek: 2,
+        isWindowOpen: true,
+        currentPendingOffers: mockPending,
+        valuationCalculator: (p) => 40.0,
+      );
+      expect(cappedOffers, isEmpty);
+    });
+
+    test('PrefsService properly saves, restores, and clears pendingTransferOffers', () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = PrefsService.instance;
+
+      final testOffers = [
+        TransferOffer(
+          id: 'offer_1',
+          playerName: 'Marcus Rashford',
+          playerPosition: 'LW',
+          playerOverall: 83,
+          playerAge: 27,
+          buyingClub: 'Paris Saint-Germain',
+          buyingClubTier: 'Tier 1 (Elite Mega Club)',
+          playerMarketValue: 45.0,
+          offeredFeeMillions: 55.0,
+          season: 1,
+          gameweek: 2,
+          status: 'pending',
+          date: DateTime.now(),
+        ).toMap(),
+        TransferOffer(
+          id: 'offer_2',
+          playerName: 'Antony',
+          playerPosition: 'RW',
+          playerOverall: 79,
+          playerAge: 24,
+          buyingClub: 'West Ham United',
+          buyingClubTier: 'Tier 3 (Established Mid-Table)',
+          playerMarketValue: 22.0,
+          offeredFeeMillions: 26.5,
+          season: 1,
+          gameweek: 3,
+          status: 'pending',
+          date: DateTime.now(),
+        ).toMap(),
+      ];
+
+      await prefs.saveCareerConfig(
+        leagueId: 'premier_league',
+        clubName: 'Manchester United',
+        clubCode: 'MUN',
+        isCustomClub: false,
+        squadMode: 'current',
+        pendingTransferOffers: testOffers,
+      );
+
+      final loaded = await prefs.getCareerConfig();
+      expect(loaded, isNotNull);
+      expect(loaded!['pendingTransferOffers'], isNotNull);
+
+      final loadedOffers = (loaded['pendingTransferOffers'] as List<dynamic>)
+          .map((o) => TransferOffer.fromMap(Map<String, dynamic>.from(o as Map)))
+          .toList();
+
+      expect(loadedOffers.length, 2);
+      expect(loadedOffers[0].playerName, 'Marcus Rashford');
+      expect(loadedOffers[0].offeredFeeMillions, 55.0);
+      expect(loadedOffers[0].buyingClub, 'Paris Saint-Germain');
+      expect(loadedOffers[1].playerName, 'Antony');
+      expect(loadedOffers[1].offeredFeeMillions, 26.5);
+      expect(loadedOffers[1].buyingClub, 'West Ham United');
 
       await prefs.clearCareerConfig();
       final cleared = await prefs.getCareerConfig();
