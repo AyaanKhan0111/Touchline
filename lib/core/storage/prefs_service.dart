@@ -136,6 +136,7 @@ class PrefsService {
   static const _keyCareerPlayerRatingsOverride = 'career_player_ratings_override';
   static const _keyCareerPlayerAgesOverride = 'career_player_ages_override';
   static const _keyCareerPendingTransferOffers = 'career_pending_transfer_offers';
+  static const _keyCareerActiveSquadEvents = 'career_active_squad_events';
 
   Future<Map<String, dynamic>?> getCareerConfig() async {
     final p = await prefs;
@@ -326,6 +327,15 @@ class PrefsService {
       } catch (_) {}
     }
 
+    final eventsRaw = p.getString(_keyCareerActiveSquadEvents);
+    List<Map<String, dynamic>> activeSquadEvents = [];
+    if (eventsRaw != null) {
+      try {
+        final decoded = jsonDecode(eventsRaw) as List<dynamic>;
+        activeSquadEvents = decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      } catch (_) {}
+    }
+
     return {
       'leagueId': p.getString(_keyCareerLeagueId) ?? 'premier_league',
       'clubName': clubName,
@@ -359,6 +369,7 @@ class PrefsService {
       'playerRatingsOverride': playerRatingsOverride,
       'playerAgesOverride': playerAgesOverride,
       'pendingTransferOffers': pendingTransferOffers,
+      'activeSquadEvents': activeSquadEvents,
     };
   }
 
@@ -395,6 +406,7 @@ class PrefsService {
     Map<String, int>? playerRatingsOverride,
     Map<String, int>? playerAgesOverride,
     List<Map<String, dynamic>>? pendingTransferOffers,
+    List<Map<String, dynamic>>? activeSquadEvents,
   }) async {
     final p = await prefs;
     await p.setString(_keyCareerLeagueId, leagueId);
@@ -472,6 +484,9 @@ class PrefsService {
     if (pendingTransferOffers != null) {
       await p.setString(_keyCareerPendingTransferOffers, jsonEncode(pendingTransferOffers));
     }
+    if (activeSquadEvents != null) {
+      await p.setString(_keyCareerActiveSquadEvents, jsonEncode(activeSquadEvents));
+    }
   }
 
   Future<void> clearCareerConfig() async {
@@ -510,5 +525,6 @@ class PrefsService {
     await p.remove(_keyCareerPlayerRatingsOverride);
     await p.remove(_keyCareerPlayerAgesOverride);
     await p.remove(_keyCareerPendingTransferOffers);
+    await p.remove(_keyCareerActiveSquadEvents);
   }
 }

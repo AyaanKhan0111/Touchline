@@ -11,6 +11,8 @@ import 'package:touchline/domain/services/cup_engine.dart';
 import 'package:touchline/domain/services/player_growth_service.dart';
 import 'package:touchline/domain/models/transfer_offer.dart';
 import 'package:touchline/domain/services/transfer_offer_service.dart';
+import 'package:touchline/domain/models/squad_event.dart';
+import 'package:touchline/domain/services/squad_event_service.dart';
 import 'package:touchline/features/career/career_screen.dart';
 import 'package:touchline/features/career/formation_editor.dart';
 
@@ -2963,4 +2965,283 @@ void main() {
       expect(cleared, isNull);
     });
   });
+
+  group('Fix 29: Dynamic Squad Events: Injuries, Leave & International Duty', () {
+    test('SquadEvent model serialization, deserialization, and computed properties', () {
+      final event = SquadEvent(
+        id: 'event_test_1',
+        playerName: 'Lisandro Martínez',
+        type: SquadEventType.injury,
+        title: 'Hamstring Strain',
+        description: 'Overstretched during sprinting drills.',
+        durationGameweeks: 3,
+        remainingGameweeks: 3,
+        startGameweek: 4,
+        startSeason: 1,
+        severity: 'Moderate',
+        date: DateTime(2026, 1, 15),
+      );
+
+      expect(event.isResolved, isFalse);
+      expect(event.badgeLabel, 'INJURED (3 GWs)');
+      expect(event.typeKey, 'injury');
+
+      // Serialization roundtrip
+      final map = event.toMap();
+      final restored = SquadEvent.fromMap(map);
+      expect(restored.id, event.id);
+      expect(restored.playerName, 'Lisandro Martínez');
+      expect(restored.type, SquadEventType.injury);
+      expect(restored.title, 'Hamstring Strain');
+      expect(restored.durationGameweeks, 3);
+      expect(restored.remainingGameweeks, 3);
+      expect(restored.startGameweek, 4);
+      expect(restored.startSeason, 1);
+      expect(restored.severity, 'Moderate');
+
+      // Test copyWith and isResolved
+      final ticked = restored.copyWith(remainingGameweeks: 0);
+      expect(ticked.isResolved, isTrue);
+
+      // Test other types badgeLabel
+      final dutyEvent = event.copyWith(
+        type: SquadEventType.internationalDuty,
+        title: 'World Cup Qualifiers',
+        remainingGameweeks: 2,
+      );
+      expect(dutyEvent.badgeLabel, 'INT DUTY (2 GWs)');
+
+      final leaveEvent = event.copyWith(
+        type: SquadEventType.personalLeave,
+        title: 'Paternity Leave',
+        remainingGameweeks: 1,
+      );
+      expect(leaveEvent.badgeLabel, 'ON LEAVE (1 GW)');
+    });
+
+    test('SquadEventType fromKey parses keys accurately with fallback to injury', () {
+      expect(SquadEventType.fromKey('injury'), SquadEventType.injury);
+      expect(SquadEventType.fromKey('personal_leave'), SquadEventType.personalLeave);
+      expect(SquadEventType.fromKey('international_duty'), SquadEventType.internationalDuty);
+      expect(SquadEventType.fromKey('unknown_key'), SquadEventType.injury);
+    });
+
+    test('SquadEventService isPlayerAvailable and getPlayerEvent helpers', () {
+      final events = [
+        SquadEvent(
+          id: 'e1',
+          playerName: 'Luke Shaw',
+          type: SquadEventType.injury,
+          title: 'Calf Muscle Tear',
+          description: 'Pulled calf in training.',
+          durationGameweeks: 4,
+          remainingGameweeks: 2,
+          startGameweek: 2,
+          startSeason: 1,
+          severity: 'Moderate',
+          date: DateTime.now(),
+        ),
+      ];
+
+      expect(SquadEventService.isPlayerAvailable('Luke Shaw', events), isFalse);
+      expect(SquadEventService.isPlayerAvailable('luke shaw', events), isFalse);
+      expect(SquadEventService.isPlayerAvailable('Bruno Fernandes', events), isTrue);
+
+      final found = SquadEventService.getPlayerEvent('Luke Shaw', events);
+      expect(found, isNotNull);
+      expect(found!.title, 'Calf Muscle Tear');
+
+      final notFound = SquadEventService.getPlayerEvent('Bruno Fernandes', events);
+      expect(notFound, isNull);
+    });
+
+    test('SquadEventService evaluateMatchdaySquadEvents decrements durations and reports recoveries', () {
+      final squad = [
+        Player.fromMap({'player_name': 'Player 1', 'overall': 82, 'primary_position': 'CB', 'mode': 'FC24', 'season': 2024, 'team_name': 'Man Utd'}),
+        Player.fromMap({'player_name': 'Player 2', 'overall': 85, 'primary_position': 'ST', 'mode': 'FC24', 'season': 2024, 'team_name': 'Man Utd'}),
+      ];
+
+      final existingEvents = [
+        SquadEvent(
+          id: 'rec_1',
+          playerName: 'Player 1',
+          type: SquadEventType.injury,
+          title: 'Hamstring Strain',
+          description: 'Recovering.',
+          durationGameweeks: 2,
+          remainingGameweeks: 1, // Last gameweek! Will recover on next tick
+          startGameweek: 1,
+          startSeason: 1,
+          severity: 'Minor',
+          date: DateTime.now(),
+        ),
+        SquadEvent(
+          id: 'rec_2',
+          playerName: 'Player 2',
+          type: SquadEventType.personalLeave,
+          title: 'Compassionate Leave',
+          description: 'Family emergency.',
+          durationGameweeks: 3,
+          remainingGameweeks: 3, // Will decrement to 2
+          startGameweek: 2,
+          startSeason: 1,
+          severity: 'Minor',
+          date: DateTime.now(),
+        ),
+      ];
+
+      final result = SquadEventService.evaluateMatchdaySquadEvents(
+        userSquad: squad,
+        gameweek: 3,
+        season: 1,
+        totalGameweeks: 38,
+        currentActiveEvents: existingEvents,
+      );
+
+      // Player 1 should have recovered
+      expect(result.recoveredEvents.length, 1);
+      expect(result.recoveredEvents.first.playerName, 'Player 1');
+
+      // Player 2 should remain active with remainingGameweeks decremented to 2
+      final p2Active = result.activeEvents.where((e) => e.playerName == 'Player 2').toList();
+      expect(p2Active.length, 1);
+      expect(p2Active.first.remainingGameweeks, 2);
+    });
+
+    test('Goalkeeper protection safeguard: never sidelines the only healthy goalkeeper', () {
+      // Squad with exactly 1 goalkeeper and 2 outfielders
+      final squad = [
+        Player.fromMap({'player_name': 'Andre Onana', 'overall': 83, 'primary_position': 'GK', 'is_goalkeeper': 1, 'mode': 'FC24', 'season': 2024, 'team_name': 'Man Utd'}),
+        Player.fromMap({'player_name': 'Harry Maguire', 'overall': 81, 'primary_position': 'CB', 'is_goalkeeper': 0, 'mode': 'FC24', 'season': 2024, 'team_name': 'Man Utd'}),
+        Player.fromMap({'player_name': 'Casemiro', 'overall': 84, 'primary_position': 'CDM', 'is_goalkeeper': 0, 'mode': 'FC24', 'season': 2024, 'team_name': 'Man Utd'}),
+      ];
+
+      // Run multiple evaluations to ensure Andre Onana is NEVER targeted when he is the only GK
+      for (int i = 0; i < 50; i++) {
+        final result = SquadEventService.evaluateMatchdaySquadEvents(
+          userSquad: squad,
+          gameweek: i + 1,
+          season: 1,
+          totalGameweeks: 38,
+          currentActiveEvents: [],
+        );
+
+        for (final newEvent in result.newEvents) {
+          expect(newEvent.playerName, isNot('Andre Onana'),
+              reason: 'The only healthy goalkeeper must never be sidelined by dynamic squad events.');
+        }
+      }
+    });
+
+    test('autoReplaceUnavailableStarters safely swaps injured starters with healthy bench players', () {
+      final fullSquad = [
+        // Starters 0..10
+        Player.fromMap({'player_name': 'GK Starter', 'overall': 82, 'primary_position': 'GK', 'is_goalkeeper': 1, 'mode': 'FC24', 'season': 2024, 'team_name': 'Test'}),
+        Player.fromMap({'player_name': 'CB 1', 'overall': 84, 'primary_position': 'CB', 'is_goalkeeper': 0, 'mode': 'FC24', 'season': 2024, 'team_name': 'Test'}),
+        Player.fromMap({'player_name': 'CB 2', 'overall': 83, 'primary_position': 'CB', 'is_goalkeeper': 0, 'mode': 'FC24', 'season': 2024, 'team_name': 'Test'}),
+        Player.fromMap({'player_name': 'LB 1', 'overall': 80, 'primary_position': 'LB', 'is_goalkeeper': 0, 'mode': 'FC24', 'season': 2024, 'team_name': 'Test'}),
+        Player.fromMap({'player_name': 'RB 1', 'overall': 81, 'primary_position': 'RB', 'is_goalkeeper': 0, 'mode': 'FC24', 'season': 2024, 'team_name': 'Test'}),
+        Player.fromMap({'player_name': 'CM 1', 'overall': 85, 'primary_position': 'CM', 'is_goalkeeper': 0, 'mode': 'FC24', 'season': 2024, 'team_name': 'Test'}),
+        Player.fromMap({'player_name': 'CM 2', 'overall': 82, 'primary_position': 'CM', 'is_goalkeeper': 0, 'mode': 'FC24', 'season': 2024, 'team_name': 'Test'}),
+        Player.fromMap({'player_name': 'CAM 1', 'overall': 86, 'primary_position': 'CAM', 'is_goalkeeper': 0, 'mode': 'FC24', 'season': 2024, 'team_name': 'Test'}),
+        Player.fromMap({'player_name': 'LW 1', 'overall': 83, 'primary_position': 'LW', 'is_goalkeeper': 0, 'mode': 'FC24', 'season': 2024, 'team_name': 'Test'}),
+        Player.fromMap({'player_name': 'RW 1', 'overall': 84, 'primary_position': 'RW', 'is_goalkeeper': 0, 'mode': 'FC24', 'season': 2024, 'team_name': 'Test'}),
+        Player.fromMap({'player_name': 'ST Injured', 'overall': 87, 'primary_position': 'ST', 'is_goalkeeper': 0, 'mode': 'FC24', 'season': 2024, 'team_name': 'Test'}), // Injured starter!
+        // Bench 11..13
+        Player.fromMap({'player_name': 'GK Sub', 'overall': 76, 'primary_position': 'GK', 'is_goalkeeper': 1, 'mode': 'FC24', 'season': 2024, 'team_name': 'Test'}),
+        Player.fromMap({'player_name': 'ST Sub Healthy', 'overall': 79, 'primary_position': 'ST', 'is_goalkeeper': 0, 'mode': 'FC24', 'season': 2024, 'team_name': 'Test'}),
+        Player.fromMap({'player_name': 'CM Sub Healthy', 'overall': 78, 'primary_position': 'CM', 'is_goalkeeper': 0, 'mode': 'FC24', 'season': 2024, 'team_name': 'Test'}),
+      ];
+
+      final activeEvents = [
+        SquadEvent(
+          id: 'ev_st',
+          playerName: 'ST Injured',
+          type: SquadEventType.injury,
+          title: 'Twisted Ankle Sprain',
+          description: 'Sprained in last fixture.',
+          durationGameweeks: 3,
+          remainingGameweeks: 3,
+          startGameweek: 5,
+          startSeason: 1,
+          severity: 'Moderate',
+          date: DateTime.now(),
+        ),
+      ];
+
+      final adjusted = SquadEventService.autoReplaceUnavailableStarters(
+        squad: fullSquad,
+        activeEvents: activeEvents,
+      );
+
+      // Position 10 (ST) should have been swapped with healthy outfield bench player
+      expect(adjusted[10].name, 'ST Sub Healthy');
+      expect(adjusted[10].primaryPosition, 'ST');
+      // The injured striker should now be relegated to bench
+      expect(adjusted.skip(11).any((p) => p.name == 'ST Injured'), isTrue);
+    });
+
+    test('PrefsService properly persists, restores, and clears activeSquadEvents', () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = PrefsService.instance;
+
+      final testEvents = [
+        SquadEvent(
+          id: 'event_sav_1',
+          playerName: 'Mason Mount',
+          type: SquadEventType.injury,
+          title: 'Hamstring Strain',
+          description: 'Sidelined for 2 weeks.',
+          durationGameweeks: 2,
+          remainingGameweeks: 2,
+          startGameweek: 7,
+          startSeason: 1,
+          severity: 'Minor',
+          date: DateTime.now(),
+        ).toMap(),
+        SquadEvent(
+          id: 'event_sav_2',
+          playerName: 'Alejandro Garnacho',
+          type: SquadEventType.internationalDuty,
+          title: 'World Cup Qualifiers',
+          description: 'Called up to Argentina national squad.',
+          durationGameweeks: 1,
+          remainingGameweeks: 1,
+          startGameweek: 7,
+          startSeason: 1,
+          severity: 'Minor',
+          date: DateTime.now(),
+        ).toMap(),
+      ];
+
+      await prefs.saveCareerConfig(
+        leagueId: 'premier_league',
+        clubName: 'Manchester United',
+        clubCode: 'MUN',
+        isCustomClub: false,
+        squadMode: 'current',
+        activeSquadEvents: testEvents,
+      );
+
+      final loaded = await prefs.getCareerConfig();
+      expect(loaded, isNotNull);
+      expect(loaded!['activeSquadEvents'], isNotNull);
+
+      final loadedEvents = (loaded['activeSquadEvents'] as List<dynamic>)
+          .map((e) => SquadEvent.fromMap(Map<String, dynamic>.from(e as Map)))
+          .toList();
+
+      expect(loadedEvents.length, 2);
+      expect(loadedEvents[0].playerName, 'Mason Mount');
+      expect(loadedEvents[0].type, SquadEventType.injury);
+      expect(loadedEvents[0].remainingGameweeks, 2);
+      expect(loadedEvents[1].playerName, 'Alejandro Garnacho');
+      expect(loadedEvents[1].type, SquadEventType.internationalDuty);
+
+      await prefs.clearCareerConfig();
+      final cleared = await prefs.getCareerConfig();
+      expect(cleared, isNull);
+    });
+  });
 }
+

@@ -26,6 +26,8 @@ import '../../domain/services/player_growth_service.dart';
 import '../../domain/models/transfer_offer.dart';
 import '../../domain/services/transfer_offer_service.dart';
 import 'inbound_offers_sheet.dart';
+import '../../domain/models/squad_event.dart';
+import '../../domain/services/squad_event_service.dart';
 
 class LeagueDefinition {
   final String id;
@@ -486,6 +488,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
   double _budgetMillions = 85.0;
   double _careerPrizeMoneyEarned = 0.0;
   final List<TransferOffer> _pendingTransferOffers = [];
+  final List<SquadEvent> _activeSquadEvents = [];
 
   List<String> _leagueClubs = [];
   List<Player> _userSquad = [];
@@ -930,6 +933,17 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       try {
         if (o is Map) {
           _pendingTransferOffers.add(TransferOffer.fromMap(Map<String, dynamic>.from(o)));
+        }
+      } catch (_) {}
+    }
+
+    // Restore active squad events (injuries, leave, international duty) (Fix 29 / User Fix 7)
+    _activeSquadEvents.clear();
+    final savedEvents = saved['activeSquadEvents'] as List<dynamic>? ?? [];
+    for (final e in savedEvents) {
+      try {
+        if (e is Map) {
+          _activeSquadEvents.add(SquadEvent.fromMap(Map<String, dynamic>.from(e)));
         }
       } catch (_) {}
     }
@@ -1383,6 +1397,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     _recentFaCupResults.clear();
     _recentCarabaoResults.clear();
     _pendingTransferOffers.clear();
+    _activeSquadEvents.clear();
     _playerAppearances.clear();
     _playerGoals.clear();
     _playerAssists.clear();
@@ -1459,6 +1474,44 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
 
     final roundFixtures = _seasonSchedule[_currentGameweek - 1];
     final resultsThisWeek = <MatchResult>[];
+
+    // Auto-replace any unavailable starters before matchday simulation (Fix 29 / User Fix 7)
+    final autoReplacedSquad = SquadEventService.autoReplaceUnavailableStarters(
+      squad: _userSquad,
+      activeEvents: _activeSquadEvents,
+    );
+    bool startersChanged = false;
+    for (int i = 0; i < min(11, _userSquad.length); i++) {
+      if (_userSquad[i].name != autoReplacedSquad[i].name) {
+        startersChanged = true;
+        break;
+      }
+    }
+    if (startersChanged) {
+      _userSquad = autoReplacedSquad;
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            duration: Duration(seconds: 3),
+            backgroundColor: Color(0xFF3E2723),
+            content: Row(
+              children: [
+                Icon(Icons.swap_horiz_rounded, color: Colors.orangeAccent, size: 20),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Squad Rotation: Unavailable starters replaced with bench players.',
+                    style: TextStyle(color: Colors.white, fontSize: 12.5, fontWeight: FontWeight.w600),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+    }
 
     // Compute user club avg rating
     double userAvg = 82.0;
@@ -1856,11 +1909,22 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       valuationCalculator: calculatePlayerValuation,
     );
 
+    // Evaluate dynamic squad events (Fix 29 / User Fix 7)
+    final squadEventResult = SquadEventService.evaluateMatchdaySquadEvents(
+      userSquad: _userSquad,
+      currentActiveEvents: _activeSquadEvents,
+      season: _currentSeason,
+      gameweek: _currentGameweek,
+      totalGameweeks: _totalGameweeks,
+    );
+
     setState(() {
       _seasonResultsArchive[_currentGameweek] = List<MatchResult>.from(resultsThisWeek);
       _currentGameweek = nextGw;
       _recentResults.clear();
       _recentResults.addAll(resultsThisWeek);
+      _activeSquadEvents.clear();
+      _activeSquadEvents.addAll(squadEventResult.activeEvents);
       if (newInboundBids.isNotEmpty) {
         _pendingTransferOffers.addAll(newInboundBids);
       }
@@ -1931,6 +1995,56 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       );
     }
 
+    // Dynamic squad event toasts: recoveries & new alerts (Fix 29 / User Fix 7)
+    if (squadEventResult.recoveredEvents.isNotEmpty && mounted) {
+      final names = squadEventResult.recoveredEvents.map((e) => e.playerName).join(', ');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 3),
+          backgroundColor: const Color(0xFF1B5E20),
+          content: Row(
+            children: [
+              const Icon(Icons.health_and_safety_rounded, color: Colors.greenAccent, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'FIT TO PLAY: $names has fully recovered and rejoined the squad!',
+                  style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 12.5),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    if (squadEventResult.newEvents.isNotEmpty && mounted) {
+      for (final event in squadEventResult.newEvents) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            duration: const Duration(seconds: 4),
+            backgroundColor: event.badgeColor.withValues(alpha: 0.95),
+            content: Row(
+              children: [
+                Icon(event.iconData, color: Colors.white, size: 20),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'SQUAD ALERT: ${event.playerName} • ${event.title} (${event.remainingGameweeks} GWs)',
+                    style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 12.5),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+    }
+
     if (justUnlockedWinter && mounted) {
       _showWinterBudgetDialog();
     }
@@ -1973,6 +2087,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     }
 
     final pendingOffersList = _pendingTransferOffers.map((o) => o.toMap()).toList();
+    final activeEventsList = _activeSquadEvents.map((e) => e.toMap()).toList();
 
     // 1. Save to SharedPreferences (fast local cache)
     await PrefsService.instance.saveCareerConfig(
@@ -2008,6 +2123,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       playerRatingsOverride: ratingsOverride,
       playerAgesOverride: agesOverride,
       pendingTransferOffers: pendingOffersList,
+      activeSquadEvents: activeEventsList,
     );
 
     final statePayload = <String, dynamic>{
@@ -2046,6 +2162,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       'playerRatingsOverride': ratingsOverride,
       'playerAgesOverride': agesOverride,
       'pendingTransferOffers': pendingOffersList,
+      'activeSquadEvents': activeEventsList,
     };
 
     // 2. Dual-layer persistence: SQLite touchline_save.db career_save table (Issue #10)
@@ -2305,11 +2422,34 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                   final isTargetStarter = index < 11;
                   final isSelectedGk = selected.isGoalkeeper || selected.primaryPosition == 'GK';
                   final isTargetGk = player.isGoalkeeper || player.primaryPosition == 'GK';
-                  final canSwap = (isSelectedGk && isTargetGk) || (!isSelectedGk && !isTargetGk);
+                  final targetEvent = SquadEventService.getPlayerEvent(player.name, _activeSquadEvents);
+                  final isTargetUnavailable = targetEvent != null;
+                  final selectedEvent = SquadEventService.getPlayerEvent(selected.name, _activeSquadEvents);
+                  final isSelectedUnavailable = selectedEvent != null;
+
+                  // Cannot place an unavailable player into Starting XI (indices 0..10)
+                  final violatesAvailability = (currentIndex < 11 && isTargetUnavailable) || (index < 11 && isSelectedUnavailable);
+                  final isGkAllowed = (isSelectedGk && isTargetGk) || (!isSelectedGk && !isTargetGk);
+                  final canSwap = isGkAllowed && !violatesAvailability;
 
                   return InkWell(
                     onTap: () {
-                      if (!canSwap) {
+                      if (violatesAvailability) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            backgroundColor: AppPalette.coral,
+                            content: Text(
+                              isTargetUnavailable
+                                  ? '${player.name} is unavailable (${targetEvent.title}) and cannot start.'
+                                  : '${selected.name} is unavailable (${selectedEvent?.title ?? "Unavailable"}) and cannot start.',
+                              style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+                            ),
+                            duration: const Duration(seconds: 2),
+                          ),
+                        );
+                        return;
+                      }
+                      if (!isGkAllowed) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
                             backgroundColor: AppPalette.red,
@@ -2378,7 +2518,25 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                                       ),
                                       const SizedBox(width: 6),
                                       PositionBadge(position: player.primaryPosition),
-                                      if (!canSwap) ...[
+                                      if (targetEvent != null) ...[
+                                        const SizedBox(width: 6),
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                                          decoration: BoxDecoration(
+                                            color: targetEvent.badgeColor.withValues(alpha: 0.15),
+                                            borderRadius: BorderRadius.circular(4),
+                                            border: Border.all(color: targetEvent.badgeColor, width: 0.8),
+                                          ),
+                                          child: Text(
+                                            targetEvent.badgeLabel,
+                                            style: TextStyle(
+                                              fontSize: 8.5,
+                                              fontWeight: FontWeight.w800,
+                                              color: targetEvent.badgeColor,
+                                            ),
+                                          ),
+                                        ),
+                                      ] else if (!isGkAllowed) ...[
                                         const SizedBox(width: 6),
                                         Container(
                                           padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
@@ -3150,6 +3308,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                   _recentFaCupResults.clear();
                   _recentCarabaoResults.clear();
                   _pendingTransferOffers.clear();
+                  _activeSquadEvents.clear();
                   _playerAppearances.clear();
                   _playerGoals.clear();
                   _playerAssists.clear();
@@ -5267,6 +5426,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
 
     final isGk = player.primaryPosition == 'GK';
     final isDef = const ['CB', 'LB', 'RB', 'LWB', 'RWB'].contains(player.primaryPosition);
+    final squadEvent = SquadEventService.getPlayerEvent(player.name, _activeSquadEvents);
 
     final statSummary = isGk
         ? '$apps apps • $cleanSheets cs$ratingStr'
@@ -5341,6 +5501,33 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                       ),
                       const SizedBox(width: 6),
                       PositionBadge(position: player.primaryPosition),
+                      if (squadEvent != null) ...[
+                        const SizedBox(width: 4),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                          decoration: BoxDecoration(
+                            color: squadEvent.badgeColor.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: squadEvent.badgeColor.withValues(alpha: 0.5)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(squadEvent.iconData, size: 9, color: squadEvent.badgeColor),
+                              const SizedBox(width: 3),
+                              Text(
+                                squadEvent.badgeLabel,
+                                style: TextStyle(
+                                  fontFamily: AppTypography.fontFamily,
+                                  fontSize: 8,
+                                  fontWeight: FontWeight.w800,
+                                  color: squadEvent.badgeColor,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                       if ((player.age?.round() ?? 25) <= 23 && (player.potential?.round() ?? 0) > player.overall) ...[
                         const SizedBox(width: 4),
                         Container(
