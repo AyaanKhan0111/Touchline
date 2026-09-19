@@ -4,18 +4,34 @@ import '../../core/database/db_service.dart';
 import '../../core/theme/app_palette.dart';
 import '../../core/theme/app_typography.dart';
 import '../../domain/models/player.dart';
+import '../../domain/services/transfer_market_service.dart';
 import '../search/player_detail_sheet.dart';
 import '../shared/widgets/player_avatar.dart';
 import '../shared/widgets/stat_badge.dart';
 import 'career_screen.dart';
 
-/// Modal bottom sheet for Scouting & Signing players from the global database (Issue #9)
+/// Categories available in the expanded Transfer Market (Fix 30 / User Fix 8)
+enum MarketCategory {
+  all('ALL', 'All Stars', Icons.stars_rounded),
+  freeAgents('FREE', 'Free Agents (£0)', Icons.money_off_csred_rounded),
+  expiring('EXPIRING', 'Expiring (50% Off)', Icons.hourglass_bottom_rounded),
+  wonderkids('WONDERKIDS', 'Wonderkids', Icons.diamond_rounded),
+  valueGems('VALUE', 'Value Gems (<£15M)', Icons.sell_rounded);
+
+  final String id;
+  final String label;
+  final IconData icon;
+  const MarketCategory(this.id, this.label, this.icon);
+}
+
+/// Modal bottom sheet for Scouting & Signing players with expanded tiers, free agents, and expiring contracts (Fix 30)
 class TransferMarketSheet extends StatefulWidget {
   final double budget;
   final bool isWindowOpen;
   final String windowTitle;
   final List<Player> userSquad;
-  final Function(Player player, double fee) onSignPlayer;
+  final Function(Player player, double fee, [int contractYears]) onSignPlayer;
+  final int currentSeason;
   final int pendingOffersCount;
   final VoidCallback? onViewOffers;
 
@@ -26,6 +42,7 @@ class TransferMarketSheet extends StatefulWidget {
     required this.windowTitle,
     required this.userSquad,
     required this.onSignPlayer,
+    this.currentSeason = 1,
     this.pendingOffersCount = 0,
     this.onViewOffers,
   });
@@ -36,6 +53,7 @@ class TransferMarketSheet extends StatefulWidget {
 
 class _TransferMarketSheetState extends State<TransferMarketSheet> {
   final TextEditingController _searchController = TextEditingController();
+  MarketCategory _selectedCategory = MarketCategory.all;
   String _selectedPositionGroup = 'ALL'; // ALL, GK, DEF, MID, FWD
   List<Player> _players = [];
   bool _isLoading = true;
@@ -82,44 +100,129 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
       }
 
       final query = _searchController.text.trim();
-      List<Map<String, dynamic>> rows;
+      final searchClause = query.isNotEmpty
+          ? " AND (player_name LIKE ? OR player_name_clean LIKE ? OR team_name LIKE ?)"
+          : "";
+      final searchParams = query.isNotEmpty
+          ? ['%$query%', '%$query%', '%$query%']
+          : <Object>[];
 
-      if (query.isEmpty) {
-        rows = await db.rawQuery('''
-          SELECT *
-          FROM players
-          WHERE season >= 2022 $posWhere
-          GROUP BY player_name
-          ORDER BY MAX(overall) DESC
-          LIMIT 60
-        ''');
-      } else {
-        final pattern = '%$query%';
-        rows = await db.rawQuery('''
-          SELECT *
-          FROM players
-          WHERE season >= 2022 $posWhere AND (player_name LIKE ? OR player_name_clean LIKE ? OR team_name LIKE ?)
-          GROUP BY player_name
-          ORDER BY MAX(overall) DESC
-          LIMIT 60
-        ''', [pattern, pattern, pattern]);
+      List<Player> loaded = [];
 
-        if (rows.isEmpty) {
-          // Fall back to historical database records if modern search returns no results
-          rows = await db.rawQuery('''
+      switch (_selectedCategory) {
+        case MarketCategory.all:
+          final rows = await db.rawQuery('''
             SELECT *
             FROM players
-            WHERE 1=1 $posWhere AND (player_name LIKE ? OR player_name_clean LIKE ? OR team_name LIKE ?)
+            WHERE season >= 2022 $posWhere $searchClause
             GROUP BY player_name
             ORDER BY MAX(overall) DESC
             LIMIT 60
-          ''', [pattern, pattern, pattern]);
-        }
+          ''', searchParams);
+          loaded = rows.map((r) => Player.fromMap(r)).toList();
+          if (loaded.isEmpty && query.isNotEmpty) {
+            final fallbackRows = await db.rawQuery('''
+              SELECT *
+              FROM players
+              WHERE 1=1 $posWhere $searchClause
+              GROUP BY player_name
+              ORDER BY MAX(overall) DESC
+              LIMIT 60
+            ''', searchParams);
+            loaded = fallbackRows.map((r) => Player.fromMap(r)).toList();
+          }
+          break;
+
+        case MarketCategory.freeAgents:
+          final rows = await db.rawQuery('''
+            SELECT *
+            FROM players
+            WHERE season >= 2022 $posWhere $searchClause
+            GROUP BY player_name
+            ORDER BY MAX(overall) DESC
+            LIMIT 250
+          ''', searchParams);
+          final candidates = rows.map((r) => Player.fromMap(r)).toList();
+          loaded = candidates.where((p) {
+            final status = TransferMarketService.computePlayerContract(p.name, widget.currentSeason);
+            return status.isFreeAgent;
+          }).take(60).toList();
+          break;
+
+        case MarketCategory.expiring:
+          final rows = await db.rawQuery('''
+            SELECT *
+            FROM players
+            WHERE season >= 2022 $posWhere $searchClause
+            GROUP BY player_name
+            ORDER BY MAX(overall) DESC
+            LIMIT 250
+          ''', searchParams);
+          final candidates = rows.map((r) => Player.fromMap(r)).toList();
+          loaded = candidates.where((p) {
+            final status = TransferMarketService.computePlayerContract(p.name, widget.currentSeason);
+            return status.isExpiring;
+          }).take(60).toList();
+          break;
+
+        case MarketCategory.wonderkids:
+          // 1. Academy prospects
+          final academy = TransferMarketService.generateYouthProspects(widget.currentSeason)
+              .where((p) {
+                if (query.isNotEmpty) {
+                  final qLower = query.toLowerCase();
+                  if (!p.name.toLowerCase().contains(qLower) &&
+                      !(p.nationality?.toLowerCase().contains(qLower) ?? false)) {
+                    return false;
+                  }
+                }
+                if (_selectedPositionGroup == 'GK') return p.primaryPosition == 'GK';
+                if (_selectedPositionGroup == 'DEF') return const ['CB', 'LB', 'RB', 'LWB', 'RWB'].contains(p.primaryPosition);
+                if (_selectedPositionGroup == 'MID') return const ['CM', 'CAM', 'CDM', 'LM', 'RM'].contains(p.primaryPosition);
+                if (_selectedPositionGroup == 'FWD') return const ['ST', 'CF', 'LW', 'RW'].contains(p.primaryPosition);
+                return true;
+              }).toList();
+
+          // 2. Database wonderkids
+          final rows = await db.rawQuery('''
+            SELECT *
+            FROM players
+            WHERE season >= 2022 AND age <= 21 AND potential >= 80 $posWhere $searchClause
+            GROUP BY player_name
+            ORDER BY MAX(potential) DESC
+            LIMIT 45
+          ''', searchParams);
+          final dbWonderkids = rows.map((r) => Player.fromMap(r)).toList();
+
+          final seen = <String>{};
+          for (final p in academy) {
+            seen.add(p.name.trim().toLowerCase());
+            loaded.add(p);
+          }
+          for (final p in dbWonderkids) {
+            if (seen.add(p.name.trim().toLowerCase())) {
+              loaded.add(p);
+            }
+          }
+          break;
+
+        case MarketCategory.valueGems:
+          final rows = await db.rawQuery('''
+            SELECT *
+            FROM players
+            WHERE season >= 2022 AND overall BETWEEN 73 AND 83 $posWhere $searchClause
+            GROUP BY player_name
+            ORDER BY MAX(overall) DESC
+            LIMIT 100
+          ''', searchParams);
+          final candidates = rows.map((r) => Player.fromMap(r)).toList();
+          loaded = candidates.where((p) => calculatePlayerValuation(p) <= 15.0).take(60).toList();
+          break;
       }
 
       if (mounted) {
         setState(() {
-          _players = rows.map((r) => Player.fromMap(r)).toList();
+          _players = loaded;
           _isLoading = false;
         });
       }
@@ -130,11 +233,14 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
     }
   }
 
-  void _promptSignPlayer(Player player) {
-    final fee = calculatePlayerValuation(player);
+  void _promptSignPlayer(Player player, ContractStatus contractStatus, double effectiveFee) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
     final ink = theme.colorScheme.onSurface;
+
+    // Calculate signed contract duration: Free Agents = 2 yrs, Wonderkids = 4 yrs, Standard = 3 yrs
+    final isWonderkid = (player.potential ?? 0) > player.overall && (player.age ?? 25) <= 21;
+    final contractYears = contractStatus.isFreeAgent ? 2 : (isWonderkid ? 4 : 3);
 
     showDialog(
       context: context,
@@ -167,9 +273,15 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: AppPalette.gold.withValues(alpha: 0.12),
+                color: contractStatus.isFreeAgent
+                    ? AppPalette.green.withValues(alpha: 0.12)
+                    : AppPalette.gold.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: AppPalette.gold.withValues(alpha: 0.3)),
+                border: Border.all(
+                  color: contractStatus.isFreeAgent
+                      ? AppPalette.green.withValues(alpha: 0.3)
+                      : AppPalette.gold.withValues(alpha: 0.3),
+                ),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -179,8 +291,27 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
                     children: [
                       Text('Transfer Fee:', style: AppTypography.caption(ink)),
                       Text(
-                        '£${fee.toStringAsFixed(1)}M',
-                        style: AppTypography.statNumber(AppPalette.gold, fontSize: 13, weight: FontWeight.w800),
+                        contractStatus.isFreeAgent
+                            ? 'FREE (£0.0M)'
+                            : (contractStatus.isExpiring
+                                ? '£${effectiveFee.toStringAsFixed(1)}M (50% OFF)'
+                                : '£${effectiveFee.toStringAsFixed(1)}M'),
+                        style: AppTypography.statNumber(
+                          contractStatus.isFreeAgent ? AppPalette.green : AppPalette.gold,
+                          fontSize: 13,
+                          weight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Contract Offered:', style: AppTypography.caption(ink)),
+                      Text(
+                        '$contractYears Seasons',
+                        style: AppTypography.statNumber(AppPalette.gold, fontSize: 12.5, weight: FontWeight.w700),
                       ),
                     ],
                   ),
@@ -190,7 +321,7 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
                     children: [
                       Text('Remaining War Chest:', style: AppTypography.caption(ink)),
                       Text(
-                        '£${(_currentBudget - fee).toStringAsFixed(1)}M',
+                        '£${(_currentBudget - effectiveFee).toStringAsFixed(1)}M',
                         style: AppTypography.statNumber(AppPalette.green, fontSize: 13, weight: FontWeight.w700),
                       ),
                     ],
@@ -207,28 +338,30 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
           ),
           FilledButton(
             style: FilledButton.styleFrom(
-              backgroundColor: AppPalette.gold,
+              backgroundColor: contractStatus.isFreeAgent ? AppPalette.green : AppPalette.gold,
               foregroundColor: isDark ? AppPalette.darkBg : Colors.white,
             ),
             onPressed: () {
               Navigator.pop(ctx);
               setState(() {
-                _currentBudget -= fee;
+                _currentBudget -= effectiveFee;
                 _ownedPlayerNames.add(player.name.trim().toLowerCase());
               });
-              widget.onSignPlayer(player, fee);
+              widget.onSignPlayer(player, effectiveFee, contractYears);
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
                   backgroundColor: AppPalette.green,
                   content: Text(
-                    'Signed ${player.name} for £${fee.toStringAsFixed(1)}M! Added to squad roster.',
+                    contractStatus.isFreeAgent
+                        ? 'Signed Free Agent ${player.name} on a $contractYears-season deal! Added to squad roster.'
+                        : 'Signed ${player.name} for £${effectiveFee.toStringAsFixed(1)}M ($contractYears seasons)! Added to squad roster.',
                     style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
                   ),
                 ),
               );
             },
             child: Text(
-              'Sign for £${fee.toStringAsFixed(1)}M',
+              contractStatus.isFreeAgent ? 'Sign Free Agent (£0)' : 'Sign for £${effectiveFee.toStringAsFixed(1)}M',
               style: const TextStyle(fontWeight: FontWeight.bold),
             ),
           ),
@@ -246,7 +379,7 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
     final border = theme.dividerColor;
 
     return Container(
-      height: MediaQuery.of(context).size.height * 0.90,
+      height: MediaQuery.of(context).size.height * 0.92,
       decoration: BoxDecoration(
         color: isDark ? AppPalette.darkBg : AppPalette.lightBg,
         borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
@@ -373,7 +506,7 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
               controller: _searchController,
               onChanged: _onSearchChanged,
               decoration: InputDecoration(
-                hintText: 'Search player or club (e.g. Haaland, Salah, Real Madrid)...',
+                hintText: 'Search player or club (e.g. Haaland, Mbappe, Real Madrid)...',
                 hintStyle: AppTypography.bodySmall(inkMuted),
                 prefixIcon: const Icon(Icons.search_rounded, size: 20),
                 suffixIcon: _searchController.text.isNotEmpty
@@ -404,23 +537,40 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
             ),
           ),
 
-          const SizedBox(height: 10),
+          const SizedBox(height: 8),
 
-          // Position Group Filter Chips
+          // Category Filter Chips (Fix 30: All Stars, Free Agents, Expiring, Wonderkids, Value Gems)
           SizedBox(
             height: 36,
             child: ListView(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 16),
+              children: MarketCategory.values.map((cat) {
+                return Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: _buildCategoryChip(cat),
+                );
+              }).toList(),
+            ),
+          ),
+
+          const SizedBox(height: 8),
+
+          // Position Group Filter Chips
+          SizedBox(
+            height: 32,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
               children: [
                 _buildPositionChip('ALL', 'All Positions'),
-                const SizedBox(width: 8),
+                const SizedBox(width: 6),
                 _buildPositionChip('GK', 'Goalkeepers'),
-                const SizedBox(width: 8),
+                const SizedBox(width: 6),
                 _buildPositionChip('DEF', 'Defenders'),
-                const SizedBox(width: 8),
+                const SizedBox(width: 6),
                 _buildPositionChip('MID', 'Midfielders'),
-                const SizedBox(width: 8),
+                const SizedBox(width: 6),
                 _buildPositionChip('FWD', 'Attackers'),
               ],
             ),
@@ -440,10 +590,10 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
                           children: [
                             const Icon(Icons.person_search_rounded, size: 48, color: AppPalette.gold),
                             const SizedBox(height: 12),
-                            Text('No players found', style: AppTypography.titleMedium(ink)),
+                            Text('No players found in this category', style: AppTypography.titleMedium(ink)),
                             const SizedBox(height: 4),
                             Text(
-                              'Try adjusting your search terms or position filter.',
+                              'Try adjusting your search terms or category filter.',
                               style: AppTypography.caption(inkMuted),
                             ),
                           ],
@@ -457,9 +607,36 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
                           final player = _players[index];
                           final normName = player.name.trim().toLowerCase();
                           final isOwned = _ownedPlayerNames.contains(normName);
-                          final fee = calculatePlayerValuation(player);
+
+                          final contractStatus = _selectedCategory == MarketCategory.freeAgents
+                              ? const ContractStatus(
+                                  seasonsRemaining: 0,
+                                  isFreeAgent: true,
+                                  isExpiring: false,
+                                  discountMultiplier: 0.0,
+                                  statusBadge: 'FREE AGENT (£0)',
+                                  badgeColor: AppPalette.green,
+                                )
+                              : (_selectedCategory == MarketCategory.expiring
+                                  ? const ContractStatus(
+                                      seasonsRemaining: 1,
+                                      isFreeAgent: false,
+                                      isExpiring: true,
+                                      discountMultiplier: 0.5,
+                                      statusBadge: '1 YR (50% OFF)',
+                                      badgeColor: AppPalette.warn,
+                                    )
+                                  : TransferMarketService.computePlayerContract(player.name, widget.currentSeason));
+
+                          final baseValuation = calculatePlayerValuation(player);
+                          final fee = TransferMarketService.calculateEffectiveTransferFee(
+                            baseValuation: baseValuation,
+                            contractStatus: contractStatus,
+                          );
+
                           final canAfford = _currentBudget >= fee;
                           final isSquadFull = widget.userSquad.length >= 25;
+                          final isWonderkid = (player.potential ?? 0) > player.overall && (player.age ?? 25) <= 21;
 
                           return InkWell(
                             onTap: () => showPlayerDetailSheet(context, player),
@@ -492,12 +669,78 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
                                             PositionBadge(position: player.primaryPosition),
                                           ],
                                         ),
-                                        const SizedBox(height: 2),
-                                        Text(
-                                          'Age ${player.age?.toInt() ?? 26} • ${player.teamName} • ${player.nationality ?? ''}',
-                                          style: AppTypography.caption(inkMuted),
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
+                                        const SizedBox(height: 3),
+                                        // Metadata & Contract status tags
+                                        Row(
+                                          children: [
+                                            Flexible(
+                                              child: Text(
+                                                'Age ${player.age?.toInt() ?? 26} • ${player.teamName}',
+                                                style: AppTypography.caption(inkMuted),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ),
+                                            if (contractStatus.isFreeAgent) ...[
+                                              const SizedBox(width: 4),
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 4.5, vertical: 1),
+                                                decoration: BoxDecoration(
+                                                  color: AppPalette.green.withValues(alpha: 0.15),
+                                                  borderRadius: BorderRadius.circular(3),
+                                                  border: Border.all(color: AppPalette.green.withValues(alpha: 0.4)),
+                                                ),
+                                                child: const Text(
+                                                  'FREE AGENT',
+                                                  style: TextStyle(
+                                                    fontFamily: AppTypography.fontFamily,
+                                                    fontSize: 8,
+                                                    fontWeight: FontWeight.w800,
+                                                    color: AppPalette.green,
+                                                  ),
+                                                ),
+                                              ),
+                                            ] else if (contractStatus.isExpiring) ...[
+                                              const SizedBox(width: 4),
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 4.5, vertical: 1),
+                                                decoration: BoxDecoration(
+                                                  color: AppPalette.warn.withValues(alpha: 0.15),
+                                                  borderRadius: BorderRadius.circular(3),
+                                                  border: Border.all(color: AppPalette.warn.withValues(alpha: 0.4)),
+                                                ),
+                                                child: const Text(
+                                                  '1 YR LEFT • 50% OFF',
+                                                  style: TextStyle(
+                                                    fontFamily: AppTypography.fontFamily,
+                                                    fontSize: 8,
+                                                    fontWeight: FontWeight.w800,
+                                                    color: AppPalette.warn,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                            if (isWonderkid) ...[
+                                              const SizedBox(width: 4),
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 4.5, vertical: 1),
+                                                decoration: BoxDecoration(
+                                                  color: AppPalette.cyan.withValues(alpha: 0.15),
+                                                  borderRadius: BorderRadius.circular(3),
+                                                  border: Border.all(color: AppPalette.cyan.withValues(alpha: 0.4)),
+                                                ),
+                                                child: Text(
+                                                  '💎 POT ${player.potential?.round()}',
+                                                  style: const TextStyle(
+                                                    fontFamily: AppTypography.fontFamily,
+                                                    fontSize: 8,
+                                                    fontWeight: FontWeight.w800,
+                                                    color: AppPalette.cyan,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ],
                                         ),
                                       ],
                                     ),
@@ -512,14 +755,24 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
                                   Column(
                                     crossAxisAlignment: CrossAxisAlignment.end,
                                     children: [
-                                      Text(
-                                        '£${fee.toStringAsFixed(1)}M',
-                                        style: AppTypography.statNumber(
-                                          canAfford ? AppPalette.gold : inkMuted,
-                                          fontSize: 12.5,
-                                          weight: FontWeight.w800,
+                                      if (contractStatus.isFreeAgent)
+                                        Text(
+                                          'FREE',
+                                          style: AppTypography.statNumber(
+                                            AppPalette.green,
+                                            fontSize: 13,
+                                            weight: FontWeight.w900,
+                                          ),
+                                        )
+                                      else
+                                        Text(
+                                          '£${fee.toStringAsFixed(1)}M',
+                                          style: AppTypography.statNumber(
+                                            canAfford ? AppPalette.gold : inkMuted,
+                                            fontSize: 12.5,
+                                            weight: FontWeight.w800,
+                                          ),
                                         ),
-                                      ),
                                       const SizedBox(height: 4),
                                       if (isOwned)
                                         Container(
@@ -584,16 +837,16 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
                                         SizedBox(
                                           height: 26,
                                           child: FilledButton(
-                                            onPressed: () => _promptSignPlayer(player),
+                                            onPressed: () => _promptSignPlayer(player, contractStatus, fee),
                                             style: FilledButton.styleFrom(
-                                              backgroundColor: AppPalette.gold,
+                                              backgroundColor: contractStatus.isFreeAgent ? AppPalette.green : AppPalette.gold,
                                               foregroundColor: isDark ? AppPalette.darkBg : Colors.white,
                                               padding: const EdgeInsets.symmetric(horizontal: 10),
                                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
                                             ),
-                                            child: const Text(
-                                              'SIGN',
-                                              style: TextStyle(
+                                            child: Text(
+                                              contractStatus.isFreeAgent ? 'SIGN FREE' : 'SIGN',
+                                              style: const TextStyle(
                                                 fontFamily: AppTypography.bodyFamily,
                                                 fontSize: 10.5,
                                                 fontWeight: FontWeight.w800,
@@ -615,6 +868,61 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
     );
   }
 
+  Widget _buildCategoryChip(MarketCategory category) {
+    final isSelected = _selectedCategory == category;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
+    Color activeColor = AppPalette.gold;
+    if (category == MarketCategory.freeAgents) {
+      activeColor = AppPalette.green;
+    } else if (category == MarketCategory.expiring) {
+      activeColor = AppPalette.warn;
+    } else if (category == MarketCategory.wonderkids) {
+      activeColor = AppPalette.cyan;
+    }
+
+    return InkWell(
+      onTap: () {
+        setState(() => _selectedCategory = category);
+        _loadPlayers();
+      },
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? activeColor.withValues(alpha: 0.22)
+              : (isDark ? AppPalette.darkSurfaceRaised : AppPalette.lightSurfaceRaised),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: isSelected ? activeColor : Theme.of(context).dividerColor,
+            width: isSelected ? 1.5 : 1,
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              category.icon,
+              size: 13,
+              color: isSelected ? activeColor : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7),
+            ),
+            const SizedBox(width: 5),
+            Text(
+              category.label,
+              style: TextStyle(
+                fontFamily: AppTypography.bodyFamily,
+                fontSize: 11,
+                fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                color: isSelected ? activeColor : Theme.of(context).colorScheme.onSurface,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildPositionChip(String code, String label) {
     final isSelected = _selectedPositionGroup == code;
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -626,7 +934,7 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
       },
       borderRadius: BorderRadius.circular(8),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         decoration: BoxDecoration(
           color: isSelected
               ? AppPalette.gold
@@ -641,7 +949,7 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
           label,
           style: TextStyle(
             fontFamily: AppTypography.bodyFamily,
-            fontSize: 11.5,
+            fontSize: 11,
             fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
             color: isSelected
                 ? (isDark ? AppPalette.darkBg : Colors.white)

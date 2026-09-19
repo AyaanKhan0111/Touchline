@@ -28,6 +28,7 @@ import '../../domain/services/transfer_offer_service.dart';
 import 'inbound_offers_sheet.dart';
 import '../../domain/models/squad_event.dart';
 import '../../domain/services/squad_event_service.dart';
+import '../../domain/services/transfer_market_service.dart';
 
 class LeagueDefinition {
   final String id;
@@ -489,6 +490,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
   double _careerPrizeMoneyEarned = 0.0;
   final List<TransferOffer> _pendingTransferOffers = [];
   final List<SquadEvent> _activeSquadEvents = [];
+  final Map<String, int> _playerContracts = {};
 
   List<String> _leagueClubs = [];
   List<Player> _userSquad = [];
@@ -948,6 +950,16 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       } catch (_) {}
     }
 
+    // Restore player contract season counters (Fix 30 / User Fix 8)
+    _playerContracts.clear();
+    final savedContracts = saved['playerContracts'] as Map<dynamic, dynamic>? ?? {};
+    for (final entry in savedContracts.entries) {
+      _playerContracts[entry.key.toString()] = (entry.value as num).toInt();
+    }
+    for (final p in _userSquad) {
+      _playerContracts[p.name] ??= TransferMarketService.computePlayerContract(p.name, _currentSeason).seasonsRemaining.clamp(2, 5);
+    }
+
     // Pre-cache authentic AI club squads for realistic match reports
     await _cacheLeagueClubSquads(db);
 
@@ -1398,6 +1410,10 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     _recentCarabaoResults.clear();
     _pendingTransferOffers.clear();
     _activeSquadEvents.clear();
+    _playerContracts.clear();
+    for (final p in _userSquad) {
+      _playerContracts[p.name] = TransferMarketService.computePlayerContract(p.name, _currentSeason).seasonsRemaining.clamp(2, 5);
+    }
     _playerAppearances.clear();
     _playerGoals.clear();
     _playerAssists.clear();
@@ -2124,6 +2140,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       playerAgesOverride: agesOverride,
       pendingTransferOffers: pendingOffersList,
       activeSquadEvents: activeEventsList,
+      playerContracts: _playerContracts,
     );
 
     final statePayload = <String, dynamic>{
@@ -2163,6 +2180,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       'playerAgesOverride': agesOverride,
       'pendingTransferOffers': pendingOffersList,
       'activeSquadEvents': activeEventsList,
+      'playerContracts': _playerContracts,
     };
 
     // 2. Dual-layer persistence: SQLite touchline_save.db career_save table (Issue #10)
@@ -2894,16 +2912,165 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         isWindowOpen: windowState.isOpen,
         windowTitle: windowState.title,
         userSquad: _userSquad,
+        currentSeason: _currentSeason,
         pendingOffersCount: _pendingTransferOffers.where((o) => o.isPending).length,
         onViewOffers: _openInboundOffersSheet,
-        onSignPlayer: (player, fee) {
+        onSignPlayer: (player, fee, [int contractYears = 3]) {
           SoundService.instance.playCorrect();
           setState(() {
             _budgetMillions = max(0.0, _budgetMillions - fee);
             _userSquad.add(player);
+            _playerContracts[player.name] = contractYears;
           });
           _persistCareerState();
         },
+      ),
+    );
+  }
+
+  /// Opens contract renewal and extension dialog for a squad player (Fix 30 / User Fix 8)
+  void _promptRenewContract(Player player) {
+    SoundService.instance.playClick();
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final ink = theme.colorScheme.onSurface;
+    final inkMuted = ink.withValues(alpha: 0.7);
+
+    final currentYears = _playerContracts[player.name] ?? 3;
+    final baseValuation = calculatePlayerValuation(player);
+    final renewalCost = TransferMarketService.calculateContractRenewalCost(baseValuation);
+    final canAfford = _budgetMillions >= renewalCost;
+    final newYears = currentYears + 3;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: isDark ? AppPalette.darkSurface : AppPalette.lightSurface,
+        title: Row(
+          children: [
+            const Icon(Icons.history_edu_rounded, color: AppPalette.gold, size: 24),
+            const SizedBox(width: 8),
+            Text('Contract Extension', style: AppTypography.titleMedium(ink)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Extend ${player.name}\'s contract by +3 seasons?',
+              style: AppTypography.bodyLarge(ink).copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Rating: ${player.overall} OVR • Pos: ${player.primaryPosition} • Age: ${player.age?.toInt() ?? 25}',
+              style: AppTypography.caption(inkMuted),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: AppPalette.gold.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: AppPalette.gold.withValues(alpha: 0.3)),
+              ),
+              child: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Current Duration:', style: AppTypography.caption(ink)),
+                      Text(
+                        '$currentYears season${currentYears == 1 ? "" : "s"}',
+                        style: TextStyle(
+                          fontFamily: AppTypography.fontFamily,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: currentYears <= 1 ? AppPalette.warn : ink,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('New Contract Term:', style: AppTypography.caption(ink)),
+                      Text(
+                        '$newYears seasons (+3 yrs)',
+                        style: AppTypography.statNumber(AppPalette.green, fontSize: 12, weight: FontWeight.w800),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Divider(color: AppPalette.gold.withValues(alpha: 0.3), height: 1),
+                  const SizedBox(height: 6),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Loyalty Extension Fee:', style: AppTypography.caption(ink)),
+                      Text(
+                        '£${renewalCost.toStringAsFixed(1)}M',
+                        style: AppTypography.statNumber(AppPalette.gold, fontSize: 13, weight: FontWeight.w800),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Club War Chest:', style: AppTypography.caption(ink)),
+                      Text(
+                        '£${_budgetMillions.toStringAsFixed(1)}M',
+                        style: AppTypography.statNumber(
+                          canAfford ? AppPalette.green : AppPalette.coral,
+                          fontSize: 12,
+                          weight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: canAfford ? AppPalette.gold : Colors.grey,
+              foregroundColor: isDark ? AppPalette.darkBg : Colors.white,
+            ),
+            onPressed: canAfford
+                ? () {
+                    Navigator.pop(ctx);
+                    SoundService.instance.playCorrect();
+                    setState(() {
+                      _budgetMillions = max(0.0, _budgetMillions - renewalCost);
+                      _playerContracts[player.name] = newYears;
+                    });
+                    _persistCareerState();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        backgroundColor: AppPalette.green,
+                        content: Text(
+                          'Extended ${player.name}\'s contract to $newYears seasons! (-£${renewalCost.toStringAsFixed(1)}M)',
+                          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+                        ),
+                      ),
+                    );
+                  }
+                : null,
+            child: Text(
+              canAfford ? 'Extend (+3 Seasons)' : 'INSUFFICIENT FUNDS',
+              style: const TextStyle(fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -2970,6 +3137,12 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       );
       growthResults.add(res);
     }
+
+    // Calculate contract tick & free agent departures (Fix 30 / User Fix 8)
+    final contractTick = TransferMarketService.processSeasonContractExpiry(
+      squad: _userSquad,
+      contracts: _playerContracts,
+    );
 
     showDialog(
       context: context,
@@ -3105,7 +3278,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
               style: FilledButton.styleFrom(backgroundColor: AppPalette.gold),
               onPressed: () {
                 Navigator.pop(ctx);
-                _showSquadDevelopmentDialog(growthResults, totalSeasonPrize);
+                _showSquadDevelopmentDialog(growthResults, totalSeasonPrize, contractTick);
               },
               child: const Text('Review Squad Development', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
             ),
@@ -3115,7 +3288,11 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     );
   }
 
-  void _showSquadDevelopmentDialog(List<PlayerGrowthResult> growthResults, double totalSeasonPrize) {
+  void _showSquadDevelopmentDialog(
+    List<PlayerGrowthResult> growthResults,
+    double totalSeasonPrize,
+    SquadContractTickResult contractTick,
+  ) {
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -3170,6 +3347,45 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                     ],
                   ),
                 ),
+                if (contractTick.departedPlayers.isNotEmpty) ...[
+                  const SizedBox(height: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: AppPalette.coral.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: AppPalette.coral.withValues(alpha: 0.4)),
+                    ),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(Icons.person_remove_rounded, size: 16, color: AppPalette.coral),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'CONTRACT EXPIRIES (${contractTick.departedPlayers.length} DEPARTED)',
+                                style: const TextStyle(
+                                  fontFamily: AppTypography.fontFamily,
+                                  fontSize: 10.5,
+                                  fontWeight: FontWeight.w800,
+                                  color: AppPalette.coral,
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                '${contractTick.departedPlayers.map((p) => p.name).join(", ")} reached contract expiry without renewal and departed as Free Agents.',
+                                style: AppTypography.caption(ink).copyWith(fontSize: 10),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 12),
                 Flexible(
                   child: ListView.separated(
@@ -3289,7 +3505,16 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
               onPressed: () {
                 Navigator.pop(ctx);
                 setState(() {
-                  _userSquad = growthResults.map((r) => r.player).toList();
+                  final remainingNames = contractTick.remainingSquad.map((p) => p.name).toSet();
+                  _userSquad = growthResults
+                      .map((r) => r.player)
+                      .where((p) => remainingNames.contains(p.name))
+                      .toList();
+                  if (_userSquad.length < 11) {
+                    _userSquad = List<Player>.from(contractTick.remainingSquad);
+                  }
+                  _playerContracts.clear();
+                  _playerContracts.addAll(contractTick.updatedContracts);
                   _currentSeason++;
                   _currentGameweek = 1;
                   _budgetMillions += totalSeasonPrize;
@@ -5567,6 +5792,45 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                           ),
                         ),
                       ],
+                      const SizedBox(width: 4),
+                      InkWell(
+                        onTap: () => _promptRenewContract(player),
+                        borderRadius: BorderRadius.circular(3),
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: (_playerContracts[player.name] ?? 3) <= 1
+                                ? AppPalette.warn.withValues(alpha: 0.18)
+                                : (isDark ? Colors.white.withValues(alpha: 0.06) : Colors.black.withValues(alpha: 0.05)),
+                            borderRadius: BorderRadius.circular(3),
+                            border: Border.all(
+                              color: (_playerContracts[player.name] ?? 3) <= 1
+                                  ? AppPalette.warn.withValues(alpha: 0.6)
+                                  : (isDark ? Colors.white.withValues(alpha: 0.15) : Colors.black.withValues(alpha: 0.12)),
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if ((_playerContracts[player.name] ?? 3) <= 1) ...[
+                                const Icon(Icons.hourglass_bottom_rounded, size: 8.5, color: AppPalette.warn),
+                                const SizedBox(width: 2),
+                              ],
+                              Text(
+                                (_playerContracts[player.name] ?? 3) <= 1
+                                    ? '1 YR LEFT'
+                                    : '${_playerContracts[player.name] ?? 3}Y CONTRACT',
+                                style: TextStyle(
+                                  fontFamily: AppTypography.fontFamily,
+                                  fontSize: 8.5,
+                                  fontWeight: FontWeight.w800,
+                                  color: (_playerContracts[player.name] ?? 3) <= 1 ? AppPalette.warn : inkMuted,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                   Text(
@@ -5580,6 +5844,20 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
             // Rating badge
             StatBadge(value: player.overall, label: ''),
             const SizedBox(width: 4),
+
+            // Contract Renewal Action
+            IconButton(
+              icon: Icon(
+                (_playerContracts[player.name] ?? 3) <= 1
+                    ? Icons.hourglass_bottom_rounded
+                    : Icons.history_edu_rounded,
+                size: 16,
+              ),
+              tooltip: 'Renew Contract (+3 Yrs)',
+              visualDensity: VisualDensity.compact,
+              color: (_playerContracts[player.name] ?? 3) <= 1 ? AppPalette.warn : AppPalette.gold,
+              onPressed: () => _promptRenewContract(player),
+            ),
 
             // Tactical Swap Action
             IconButton(

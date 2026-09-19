@@ -34,6 +34,7 @@ class AppPalette {
   static const Color coral    = red;                // Coral red
   static const Color amber    = Color(0xFFF39C12);  // Warnings, draws, caution
   static const Color blue     = Color(0xFF3498DB);  // Info, stats, neutral
+  static const Color cyan     = Color(0xFF00D2D3);  // Wonderkids, discovery, youth
 
   // ─── Position Colors (for avatar rings) ────────────────────────────
   static const Color posGK   = Color(0xFFE8B923);  // Goalkeeper gold

@@ -13,8 +13,10 @@ import 'package:touchline/domain/models/transfer_offer.dart';
 import 'package:touchline/domain/services/transfer_offer_service.dart';
 import 'package:touchline/domain/models/squad_event.dart';
 import 'package:touchline/domain/services/squad_event_service.dart';
+import 'package:touchline/domain/services/transfer_market_service.dart';
 import 'package:touchline/features/career/career_screen.dart';
 import 'package:touchline/features/career/formation_editor.dart';
+import 'package:touchline/features/career/transfer_market_sheet.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -3243,5 +3245,192 @@ void main() {
       expect(cleared, isNull);
     });
   });
+
+  group('Fix 30 - Expanded Transfer Market, Free Agents & Expiring Contracts', () {
+    test('ContractStatus.fromSeasons correctly identifies free agents, expiring, and multi-year deals', () {
+      final freeAgent = ContractStatus.fromSeasons(0);
+      expect(freeAgent.isFreeAgent, isTrue);
+      expect(freeAgent.isExpiring, isFalse);
+      expect(freeAgent.discountMultiplier, 0.0);
+      expect(freeAgent.statusBadge, contains('FREE AGENT'));
+
+      final expiring = ContractStatus.fromSeasons(1);
+      expect(expiring.isFreeAgent, isFalse);
+      expect(expiring.isExpiring, isTrue);
+      expect(expiring.discountMultiplier, 0.5);
+      expect(expiring.statusBadge, contains('50% OFF'));
+
+      final multiYear = ContractStatus.fromSeasons(3);
+      expect(multiYear.isFreeAgent, isFalse);
+      expect(multiYear.isExpiring, isFalse);
+      expect(multiYear.discountMultiplier, 1.0);
+      expect(multiYear.statusBadge, '3 YRS');
+    });
+
+    test('TransferMarketService.computePlayerContract returns valid deterministic status', () {
+      final contract1 = TransferMarketService.computePlayerContract('Erling Haaland', 1);
+      final contract2 = TransferMarketService.computePlayerContract('Erling Haaland', 1);
+      expect(contract1.seasonsRemaining, contract2.seasonsRemaining);
+      expect(contract1.discountMultiplier, contract2.discountMultiplier);
+
+      // Verify range
+      expect(contract1.seasonsRemaining, inInclusiveRange(0, 4));
+    });
+
+    test('TransferMarketService.calculateEffectiveTransferFee discounts expiring contracts and zeroes free agents', () {
+      const baseFee = 50.0;
+
+      final freeFee = TransferMarketService.calculateEffectiveTransferFee(
+        baseValuation: baseFee,
+        contractStatus: ContractStatus.fromSeasons(0),
+      );
+      expect(freeFee, 0.0);
+
+      final expiringFee = TransferMarketService.calculateEffectiveTransferFee(
+        baseValuation: baseFee,
+        contractStatus: ContractStatus.fromSeasons(1),
+      );
+      expect(expiringFee, 25.0);
+
+      final normalFee = TransferMarketService.calculateEffectiveTransferFee(
+        baseValuation: baseFee,
+        contractStatus: ContractStatus.fromSeasons(3),
+      );
+      expect(normalFee, 50.0);
+    });
+
+    test('TransferMarketService.calculateContractRenewalCost applies ~10% loyalty fee with min/max clamps', () {
+      final cheapCost = TransferMarketService.calculateContractRenewalCost(3.0);
+      expect(cheapCost, 0.5); // clamped to min 0.5
+
+      final midCost = TransferMarketService.calculateContractRenewalCost(40.0);
+      expect(midCost, 4.0); // 10% of 40
+
+      final expensiveCost = TransferMarketService.calculateContractRenewalCost(180.0);
+      expect(expensiveCost, 12.0); // clamped to max 12.0
+    });
+
+    test('TransferMarketService.tickSquadContracts decrements all player contracts', () {
+      final initial = {'Haaland': 3, 'Salah': 1, 'Saka': 4};
+      final ticked = TransferMarketService.tickSquadContracts(initial);
+      expect(ticked['Haaland'], 2);
+      expect(ticked['Salah'], 0);
+      expect(ticked['Saka'], 3);
+    });
+
+    test('TransferMarketService.processSeasonContractExpiry identifies departures and retains safety invariants', () {
+      final gk = Player(
+        mode: 'test',
+        squadId: 's1',
+        teamCode: 'MCI',
+        teamName: 'Manchester City',
+        season: 2024,
+        playerId: 'gk1',
+        name: 'Ederson',
+        overall: 88,
+        displayPosition: 'GK',
+        primaryPosition: 'GK',
+        allPositions: 'GK',
+        pace: 50,
+        shooting: 20,
+        passing: 60,
+        dribbling: 40,
+        defending: 30,
+        physicality: 70,
+        isGoalkeeper: true,
+      );
+
+      final outfieldPlayers = List.generate(12, (i) => Player(
+        mode: 'test',
+        squadId: 's${i + 2}',
+        teamCode: 'MCI',
+        teamName: 'Manchester City',
+        season: 2024,
+        playerId: 'p$i',
+        name: 'Player $i',
+        overall: 80 + (i % 5),
+        displayPosition: 'CM',
+        primaryPosition: 'CM',
+        allPositions: 'CM',
+        pace: 75,
+        shooting: 70,
+        passing: 80,
+        dribbling: 78,
+        defending: 72,
+        physicality: 75,
+        isGoalkeeper: false,
+      ));
+
+      final fullSquad = <Player>[gk, ...outfieldPlayers]; // 13 players
+      final contracts = <String, int>{
+        'Ederson': 1, // Will reach 0, but is the only GK!
+        'Player 0': 1, // Will reach 0, can depart
+        'Player 1': 3, // Stays at 2
+      };
+      for (int i = 2; i < 12; i++) {
+        contracts['Player $i'] = 3;
+      }
+
+      final result = TransferMarketService.processSeasonContractExpiry(
+        squad: fullSquad,
+        contracts: contracts,
+      );
+
+      // Ederson was the only GK, so he must be auto-extended for safety
+      expect(result.remainingSquad.any((p) => p.name == 'Ederson'), isTrue);
+      expect(result.updatedContracts['Ederson'], 1);
+
+      // Player 0 had contract 1, reached 0, and could safely depart
+      expect(result.departedPlayers.any((p) => p.name == 'Player 0'), isTrue);
+      expect(result.remainingSquad.any((p) => p.name == 'Player 0'), isFalse);
+
+      // Squad remains at least 11 players
+      expect(result.remainingSquad.length, greaterThanOrEqualTo(11));
+    });
+
+    test('TransferMarketService.generateYouthProspects produces wonderkids with high ceilings', () {
+      final prospects = TransferMarketService.generateYouthProspects(1);
+      expect(prospects, isNotEmpty);
+      for (final p in prospects) {
+        expect(p.age, inInclusiveRange(17.0, 21.0));
+        expect(p.potential, greaterThanOrEqualTo(85.0));
+        expect(p.teamName, 'Youth Academy');
+      }
+    });
+
+    test('PrefsService saves and restores player contracts accurately', () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = PrefsService.instance;
+
+      final testContracts = {
+        'Bukayo Saka': 4,
+        'Declan Rice': 3,
+        'Gabriel Martinelli': 1,
+      };
+
+      await prefs.saveCareerConfig(
+        leagueId: 'premier_league',
+        clubName: 'Arsenal',
+        clubCode: 'ARS',
+        isCustomClub: false,
+        squadMode: 'current',
+        playerContracts: testContracts,
+      );
+
+      final loaded = await prefs.getCareerConfig();
+      expect(loaded, isNotNull);
+      expect(loaded!['playerContracts'], isNotNull);
+
+      final loadedContracts = Map<String, int>.from(loaded['playerContracts'] as Map);
+      expect(loadedContracts['Bukayo Saka'], 4);
+      expect(loadedContracts['Declan Rice'], 3);
+      expect(loadedContracts['Gabriel Martinelli'], 1);
+
+      await prefs.clearCareerConfig();
+      final cleared = await prefs.getCareerConfig();
+      expect(cleared, isNull);
+    });
+  });
 }
+
 
