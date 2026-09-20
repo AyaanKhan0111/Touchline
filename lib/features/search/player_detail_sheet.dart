@@ -114,7 +114,7 @@ class PlayerDetailSheet extends StatelessWidget {
                             const SizedBox(height: 2),
                             Text(
                               isCareerMode
-                                  ? '${careerClubName ?? player.teamName} • Season ${careerSeason ?? 1}'
+                                  ? '${careerClubName ?? player.teamName} • Season ${careerSeason ?? 1} (${CareerScreen.getSeasonYearLabel(careerSeason ?? 1)})'
                                   : '${player.teamName} • ${player.season}',
                               style: AppTypography.bodySmall(inkMuted),
                             ),

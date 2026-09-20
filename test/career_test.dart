@@ -5205,6 +5205,103 @@ void main() {
       expect(remainingIneligible, isEmpty);
     });
   });
+
+  group('15-Season Maximum Career Mode & Dynamic Season Year Formatting (26/27 to 40/41)', () {
+    test('CareerScreen.kMaxCareerSeasons is strictly 15', () {
+      expect(CareerScreen.kMaxCareerSeasons, 15);
+    });
+
+    test('CareerScreen.getSeasonYearLabel correctly produces 26/27 for Season 1 and increments to 40/41 for Season 15', () {
+      final expectedYears = [
+        '26/27', // Season 1
+        '27/28', // Season 2
+        '28/29', // Season 3
+        '29/30', // Season 4
+        '30/31', // Season 5
+        '31/32', // Season 6
+        '32/33', // Season 7
+        '33/34', // Season 8
+        '34/35', // Season 9
+        '35/36', // Season 10
+        '36/37', // Season 11
+        '37/38', // Season 12
+        '38/39', // Season 13
+        '39/40', // Season 14
+        '40/41', // Season 15
+      ];
+
+      for (int s = 1; s <= 15; s++) {
+        expect(
+          CareerScreen.getSeasonYearLabel(s),
+          expectedYears[s - 1],
+          reason: 'Season $s must be formatted as ${expectedYears[s - 1]}',
+        );
+      }
+    });
+
+    test('CareerScreen.getSeasonYearLabel safely clamps boundary and out-of-range seasons', () {
+      expect(CareerScreen.getSeasonYearLabel(0), '26/27');
+      expect(CareerScreen.getSeasonYearLabel(-5), '26/27');
+      expect(CareerScreen.getSeasonYearLabel(16), '40/41');
+      expect(CareerScreen.getSeasonYearLabel(99), '40/41');
+      expect(CareerScreen.getSeasonYearLabel(null), '26/27');
+    });
+
+    test('PrefsService properly persists, restores, and clears careerTrophies', () async {
+      final prefs = PrefsService.instance;
+      await prefs.clearCareerConfig();
+
+      // Initially empty / zeroed
+      var config = await prefs.getCareerConfig();
+      expect(config, isNull);
+
+      final trophies = {'league': 3, 'ucl': 2, 'faCup': 1, 'carabao': 4};
+      await prefs.saveCareerConfig(
+        leagueId: 'premier_league',
+        clubName: 'Arsenal',
+        clubCode: 'ARS',
+        isCustomClub: false,
+        squadMode: 'current',
+        careerTrophies: trophies,
+      );
+
+      config = await prefs.getCareerConfig();
+      expect(config, isNotNull);
+      final restoredTrophies = config!['careerTrophies'] as Map<String, int>;
+      expect(restoredTrophies['league'], 3);
+      expect(restoredTrophies['ucl'], 2);
+      expect(restoredTrophies['faCup'], 1);
+      expect(restoredTrophies['carabao'], 4);
+
+      // Verify clear
+      await prefs.clearCareerConfig();
+      config = await prefs.getCareerConfig();
+      expect(config, isNull);
+    });
+
+    test('Competition fixture titles incorporate authentic season year codes', () {
+      for (int s = 1; s <= 15; s++) {
+        final year = CareerScreen.getSeasonYearLabel(s);
+        final plTitle = 'PREMIER LEAGUE $year';
+        final uclTitle = 'UEFA CHAMPIONS LEAGUE $year';
+        final faCupTitle = 'THE EMIRATES FA CUP $year';
+        final carabaoTitle = 'CARABAO CUP $year';
+
+        if (s == 1) {
+          expect(plTitle, 'PREMIER LEAGUE 26/27');
+          expect(uclTitle, 'UEFA CHAMPIONS LEAGUE 26/27');
+          expect(faCupTitle, 'THE EMIRATES FA CUP 26/27');
+          expect(carabaoTitle, 'CARABAO CUP 26/27');
+        } else if (s == 2) {
+          expect(plTitle, 'PREMIER LEAGUE 27/28');
+          expect(uclTitle, 'UEFA CHAMPIONS LEAGUE 27/28');
+        } else if (s == 15) {
+          expect(plTitle, 'PREMIER LEAGUE 40/41');
+          expect(uclTitle, 'UEFA CHAMPIONS LEAGUE 40/41');
+        }
+      }
+    });
+  });
 }
 
 

@@ -143,6 +143,7 @@ class PrefsService {
   static const _keyCareerCompPlayerStats = 'career_comp_player_stats';
   static const _keyCareerPlayerActiveClubs = 'career_player_active_clubs';
   static const _keyCareerAiTransferHistory = 'career_ai_transfer_history';
+  static const _keyCareerTrophies = 'career_trophies';
 
   Future<Map<String, dynamic>?> getCareerConfig() async {
     final p = await prefs;
@@ -394,6 +395,15 @@ class PrefsService {
       } catch (_) {}
     }
 
+    final trophiesRaw = p.getString(_keyCareerTrophies);
+    Map<String, int> careerTrophies = {'league': 0, 'ucl': 0, 'faCup': 0, 'carabao': 0};
+    if (trophiesRaw != null) {
+      try {
+        final decoded = jsonDecode(trophiesRaw) as Map<String, dynamic>;
+        careerTrophies = decoded.map((k, v) => MapEntry(k.toString(), (v as num).toInt()));
+      } catch (_) {}
+    }
+
     return {
       'leagueId': p.getString(_keyCareerLeagueId) ?? 'premier_league',
       'clubName': clubName,
@@ -434,6 +444,7 @@ class PrefsService {
       'aiClubSquads': aiClubSquads,
       'playerActiveClubs': playerActiveClubs,
       'aiTransferHistory': aiTransferHistory,
+      'careerTrophies': careerTrophies,
     };
   }
 
@@ -477,6 +488,7 @@ class PrefsService {
     Map<String, List<String>>? aiClubSquads,
     Map<String, String>? playerActiveClubs,
     List<Map<String, dynamic>>? aiTransferHistory,
+    Map<String, int>? careerTrophies,
   }) async {
     final p = await prefs;
     await p.setString(_keyCareerLeagueId, leagueId);
@@ -575,6 +587,9 @@ class PrefsService {
     if (aiTransferHistory != null) {
       await p.setString(_keyCareerAiTransferHistory, jsonEncode(aiTransferHistory));
     }
+    if (careerTrophies != null) {
+      await p.setString(_keyCareerTrophies, jsonEncode(careerTrophies));
+    }
   }
 
   Future<void> clearCareerConfig() async {
@@ -620,5 +635,6 @@ class PrefsService {
     await p.remove(_keyCareerCompPlayerStats);
     await p.remove(_keyCareerPlayerActiveClubs);
     await p.remove(_keyCareerAiTransferHistory);
+    await p.remove(_keyCareerTrophies);
   }
 }

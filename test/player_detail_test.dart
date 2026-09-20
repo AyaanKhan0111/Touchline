@@ -96,7 +96,7 @@ void main() {
       expect(find.text('8'), findsOneWidget);
       expect(find.text('Goals Scored'), findsOneWidget);
       expect(find.text('5'), findsOneWidget);
-      expect(find.text('Ayaan FC • Season 2'), findsOneWidget);
+      expect(find.text('Ayaan FC • Season 2 (27/28)'), findsOneWidget);
     });
 
     testWidgets('Career mode displays Clean Sheets for Goalkeepers and Defenders (Issue #8)', (tester) async {

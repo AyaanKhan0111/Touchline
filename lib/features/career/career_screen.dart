@@ -508,6 +508,15 @@ double calculatePlayerSalePrice(Player player) {
 class CareerScreen extends ConsumerStatefulWidget {
   const CareerScreen({super.key});
 
+  static const int kMaxCareerSeasons = 15;
+
+  static String getSeasonYearLabel([int? season]) {
+    final s = (season ?? 1).clamp(1, kMaxCareerSeasons);
+    final startYr = 26 + (s - 1);
+    final endYr = startYr + 1;
+    return '$startYr/$endYr';
+  }
+
   @override
   ConsumerState<CareerScreen> createState() => _CareerScreenState();
 }
@@ -516,6 +525,9 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
   bool _isLoading = true;
   bool _isConfigured = false;
   Map<String, dynamic>? _existingSaveData;
+
+  static const int kMaxCareerSeasons = CareerScreen.kMaxCareerSeasons;
+  static String getSeasonYearLabel([int? season]) => CareerScreen.getSeasonYearLabel(season);
 
   // Active Career state
   String _leagueId = 'premier_league';
@@ -529,6 +541,10 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
   bool _winterBudgetAwarded = false;
   double _budgetMillions = 85.0;
   double _careerPrizeMoneyEarned = 0.0;
+  int _careerLeagueTitles = 0;
+  int _careerUclTitles = 0;
+  int _careerFaCupTitles = 0;
+  int _careerCarabaoCupTitles = 0;
   final List<TransferOffer> _pendingTransferOffers = [];
   final List<SquadEvent> _activeSquadEvents = [];
   final Map<String, int> _playerContracts = {};
@@ -749,7 +765,12 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     _squadMode = saved['squadMode'] as String? ?? 'current';
     _budgetMillions = (saved['budget'] as num?)?.toDouble() ?? getClubStartingBudget(_userClub);
     _careerPrizeMoneyEarned = (saved['prizeMoney'] as num?)?.toDouble() ?? 0.0;
-    _currentSeason = (saved['season'] as num?)?.toInt() ?? 1;
+    _currentSeason = ((saved['season'] as num?)?.toInt() ?? 1).clamp(1, kMaxCareerSeasons);
+    final savedTrophies = saved['careerTrophies'] as Map<String, dynamic>? ?? {};
+    _careerLeagueTitles = (savedTrophies['league'] as num?)?.toInt() ?? 0;
+    _careerUclTitles = (savedTrophies['ucl'] as num?)?.toInt() ?? 0;
+    _careerFaCupTitles = (savedTrophies['faCup'] as num?)?.toInt() ?? 0;
+    _careerCarabaoCupTitles = (savedTrophies['carabao'] as num?)?.toInt() ?? 0;
     _currentGameweek = (saved['gameweek'] as num?)?.toInt() ?? 1;
     _totalGameweeks = (saved['totalGameweeks'] as num?)?.toInt() ?? 38;
     _winterBudgetAwarded = saved['winterBudgetAwarded'] as bool? ?? false;
@@ -1966,6 +1987,10 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     _totalGameweeks = _setupTotalGameweeks;
     _winterBudgetAwarded = false;
     _careerPrizeMoneyEarned = 0.0;
+    _careerLeagueTitles = 0;
+    _careerUclTitles = 0;
+    _careerFaCupTitles = 0;
+    _careerCarabaoCupTitles = 0;
     _formationId = '4-3-3';
     _customFormationSlots.clear();
     _uclTournament = UclTournament.create(userClub: clubName);
@@ -3033,6 +3058,12 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       aiClubSquads: _aiClubSquads,
       playerActiveClubs: _playerActiveClubs,
       aiTransferHistory: _aiTransferHistory,
+      careerTrophies: {
+        'league': _careerLeagueTitles,
+        'ucl': _careerUclTitles,
+        'faCup': _careerFaCupTitles,
+        'carabao': _careerCarabaoCupTitles,
+      },
     );
 
     final statePayload = <String, dynamic>{
@@ -3080,6 +3111,12 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       'aiClubSquads': _aiClubSquads,
       'playerActiveClubs': _playerActiveClubs,
       'aiTransferHistory': _aiTransferHistory,
+      'careerTrophies': {
+        'league': _careerLeagueTitles,
+        'ucl': _careerUclTitles,
+        'faCup': _careerFaCupTitles,
+        'carabao': _careerCarabaoCupTitles,
+      },
     };
 
     // 2. Dual-layer persistence: SQLite touchline_save.db career_save table (Issue #10)
@@ -4073,6 +4110,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         leagueId: _leagueId,
         currentGameweek: _currentGameweek,
         totalGameweeks: _totalGameweeks,
+        currentSeason: _currentSeason,
         schedule: _seasonSchedule,
         seasonResultsArchive: _seasonResultsArchive,
       ),
@@ -4123,6 +4161,11 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       contracts: _playerContracts,
     );
 
+    final isCareerFinale = _currentSeason >= kMaxCareerSeasons;
+    final wonUcl = _uclTournament?.champion == _userClub;
+    final wonFaCup = _faCupTournament?.champion == _userClub;
+    final wonCarabao = _carabaoCupTournament?.champion == _userClub;
+
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -4143,7 +4186,9 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
               const SizedBox(width: 10),
               Expanded(
                 child: Text(
-                  isChampion ? 'CHAMPIONS! 🏆' : 'Season $_currentSeason Concluded',
+                  isChampion
+                      ? (isCareerFinale ? 'CHAMPIONS & 15-SEASON DYNASTY! 🏆' : 'CHAMPIONS! 🏆')
+                      : (isCareerFinale ? '15-Season Career Finale Concluded' : 'Season $_currentSeason Concluded'),
                   style: AppTypography.titleLarge(ink),
                 ),
               ),
@@ -4155,7 +4200,9 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Your club completed all $_totalGameweeks matchdays of Season $_currentSeason, finishing in position #$pos of $totalTeams.',
+                  isCareerFinale
+                      ? 'Your club completed all $_totalGameweeks matchdays of Season 15 (${getSeasonYearLabel(15)}), finishing in position #$pos of $totalTeams. You have reached the career limit of 15 seasons—congratulations on an unforgettable managerial legacy!'
+                      : 'Your club completed all $_totalGameweeks matchdays of Season $_currentSeason (${getSeasonYearLabel(_currentSeason)}), finishing in position #$pos of $totalTeams.',
                   style: AppTypography.bodySmall(ink.withValues(alpha: 0.85)),
                 ),
                 const SizedBox(height: 14),
@@ -4257,7 +4304,16 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
               style: FilledButton.styleFrom(backgroundColor: AppPalette.gold),
               onPressed: () {
                 Navigator.pop(ctx);
-                _showSquadDevelopmentDialog(growthResults, totalSeasonPrize, contractTick);
+                _showSquadDevelopmentDialog(
+                  growthResults,
+                  totalSeasonPrize,
+                  contractTick,
+                  isCareerFinale: isCareerFinale,
+                  isChampion: isChampion,
+                  wonUcl: wonUcl,
+                  wonFaCup: wonFaCup,
+                  wonCarabao: wonCarabao,
+                );
               },
               child: const Text('Review Squad Development', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold)),
             ),
@@ -4270,8 +4326,13 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
   void _showSquadDevelopmentDialog(
     List<PlayerGrowthResult> growthResults,
     double totalSeasonPrize,
-    SquadContractTickResult contractTick,
-  ) {
+    SquadContractTickResult contractTick, {
+    bool isCareerFinale = false,
+    bool isChampion = false,
+    bool wonUcl = false,
+    bool wonFaCup = false,
+    bool wonCarabao = false,
+  }) {
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -4483,72 +4544,431 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
               style: FilledButton.styleFrom(backgroundColor: AppPalette.gold),
               onPressed: () {
                 Navigator.pop(ctx);
-                setState(() {
-                  final remainingNames = contractTick.remainingSquad.map((p) => p.name).toSet();
-                  _userSquad = growthResults
-                      .map((r) => r.player)
-                      .where((p) => remainingNames.contains(p.name))
-                      .toList();
-                  if (_userSquad.length < 11) {
-                    _userSquad = List<Player>.from(contractTick.remainingSquad);
-                  }
-                  _playerContracts.clear();
-                  _playerContracts.addAll(contractTick.updatedContracts);
-                  _currentSeason++;
-                  _currentGameweek = 1;
-                  _budgetMillions += totalSeasonPrize;
-                  _careerPrizeMoneyEarned += totalSeasonPrize;
-                  _winterBudgetAwarded = false;
-                  _seasonSchedule = generateSeasonSchedule(_leagueClubs, totalGameweeks: _totalGameweeks);
-                  _uclTournament = UclTournament.create(userClub: _userClub);
-                  final cupPool = List<String>.from(_leagueClubs);
-                  for (final c in CupTournament.kDefaultEnglishCupClubs) {
-                    if (!cupPool.contains(c)) cupPool.add(c);
-                  }
-                  _faCupTournament = CupTournament.create(id: 'fa_cup', userClub: _userClub, poolClubs: cupPool);
-                  _carabaoCupTournament = CupTournament.create(id: 'carabao_cup', userClub: _userClub, poolClubs: cupPool);
-                  _recentResults.clear();
-                  _recentUclResults.clear();
-                  _recentFaCupResults.clear();
-                  _recentCarabaoResults.clear();
-                  _pendingTransferOffers.clear();
-                  _activeSquadEvents.clear();
-                  _playerAppearances.clear();
-                  _playerGoals.clear();
-                  _playerAssists.clear();
-                  _playerCleanSheets.clear();
-                  _playerRatingsTotal.clear();
-                  _playerRatingsCount.clear();
-                  _leaguePlayerGoals.clear();
-                  _leaguePlayerClubs.clear();
-                  _leaguePlayerAssists.clear();
-                  _leagueAssistClubs.clear();
-                  _leagueClubCleanSheets.clear();
-                  _leagueClubRatingTotals.clear();
-                  _leagueClubRatingCounts.clear();
-                  _teamStatsSortIndex = 0;
-                  _seasonResultsArchive.clear();
-                  _standingsTab = 0;
-                  for (final t in _leagueTable) {
-                    t.played = 0;
-                    t.won = 0;
-                    t.drawn = 0;
-                    t.lost = 0;
-                    t.goalsFor = 0;
-                    t.goalsAgainst = 0;
-                    t.points = 0;
-                  }
-                });
-                _persistCareerState();
+                if (isCareerFinale) {
+                  setState(() {
+                    if (isChampion) _careerLeagueTitles++;
+                    if (wonUcl) _careerUclTitles++;
+                    if (wonFaCup) _careerFaCupTitles++;
+                    if (wonCarabao) _careerCarabaoCupTitles++;
+                    _budgetMillions += totalSeasonPrize;
+                    _careerPrizeMoneyEarned += totalSeasonPrize;
+                  });
+                  _persistCareerState();
+                  _showCareerRetirementDialog();
+                } else {
+                  setState(() {
+                    if (isChampion) _careerLeagueTitles++;
+                    if (wonUcl) _careerUclTitles++;
+                    if (wonFaCup) _careerFaCupTitles++;
+                    if (wonCarabao) _careerCarabaoCupTitles++;
+                    final remainingNames = contractTick.remainingSquad.map((p) => p.name).toSet();
+                    _userSquad = growthResults
+                        .map((r) => r.player)
+                        .where((p) => remainingNames.contains(p.name))
+                        .toList();
+                    if (_userSquad.length < 11) {
+                      _userSquad = List<Player>.from(contractTick.remainingSquad);
+                    }
+                    _playerContracts.clear();
+                    _playerContracts.addAll(contractTick.updatedContracts);
+                    _currentSeason = (_currentSeason + 1).clamp(1, kMaxCareerSeasons);
+                    _currentGameweek = 1;
+                    _budgetMillions += totalSeasonPrize;
+                    _careerPrizeMoneyEarned += totalSeasonPrize;
+                    _winterBudgetAwarded = false;
+                    _seasonSchedule = generateSeasonSchedule(_leagueClubs, totalGameweeks: _totalGameweeks);
+                    _uclTournament = UclTournament.create(userClub: _userClub);
+                    final cupPool = List<String>.from(_leagueClubs);
+                    for (final c in CupTournament.kDefaultEnglishCupClubs) {
+                      if (!cupPool.contains(c)) cupPool.add(c);
+                    }
+                    _faCupTournament = CupTournament.create(id: 'fa_cup', userClub: _userClub, poolClubs: cupPool);
+                    _carabaoCupTournament = CupTournament.create(id: 'carabao_cup', userClub: _userClub, poolClubs: cupPool);
+                    _recentResults.clear();
+                    _recentUclResults.clear();
+                    _recentFaCupResults.clear();
+                    _recentCarabaoResults.clear();
+                    _pendingTransferOffers.clear();
+                    _activeSquadEvents.clear();
+                    _playerAppearances.clear();
+                    _playerGoals.clear();
+                    _playerAssists.clear();
+                    _playerCleanSheets.clear();
+                    _playerRatingsTotal.clear();
+                    _playerRatingsCount.clear();
+                    _leaguePlayerGoals.clear();
+                    _leaguePlayerClubs.clear();
+                    _leaguePlayerAssists.clear();
+                    _leagueAssistClubs.clear();
+                    _leagueClubCleanSheets.clear();
+                    _leagueClubRatingTotals.clear();
+                    _leagueClubRatingCounts.clear();
+                    _teamStatsSortIndex = 0;
+                    _seasonResultsArchive.clear();
+                    _standingsTab = 0;
+                    for (final t in _leagueTable) {
+                      t.played = 0;
+                      t.won = 0;
+                      t.drawn = 0;
+                      t.lost = 0;
+                      t.goalsFor = 0;
+                      t.goalsAgainst = 0;
+                      t.points = 0;
+                    }
+                  });
+                  _persistCareerState();
+                }
               },
               child: Text(
-                'Begin Season ${_currentSeason + 1}',
+                isCareerFinale
+                    ? 'Enter Hall of Fame (15-Season Finale) 🏆'
+                    : 'Begin Season ${_currentSeason + 1} (${getSeasonYearLabel(_currentSeason + 1)})',
                 style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
               ),
             ),
           ],
         );
       },
+    );
+  }
+
+  void _showCareerRetirementDialog() {
+    final totalTrophies = _careerLeagueTitles + _careerUclTitles + _careerFaCupTitles + _careerCarabaoCupTitles;
+    String legacyTitle;
+    String legacyBadge;
+    Color legacyColor;
+
+    if (totalTrophies >= 12) {
+      legacyTitle = 'IMMORTAL GOAT MANAGER';
+      legacyBadge = 'LEGENDARY DYNASTY';
+      legacyColor = AppPalette.gold;
+    } else if (totalTrophies >= 7) {
+      legacyTitle = 'WORLD-CLASS MASTERMIND';
+      legacyBadge = 'CONTINENTAL TITAN';
+      legacyColor = const Color(0xFF4A90E2);
+    } else if (totalTrophies >= 3) {
+      legacyTitle = 'DOMESTIC ICON';
+      legacyBadge = 'DECORATED TACTICIAN';
+      legacyColor = AppPalette.green;
+    } else if (totalTrophies >= 1) {
+      legacyTitle = 'SILVERWARE ACHIEVER';
+      legacyBadge = 'HONOURED MANAGER';
+      legacyColor = Colors.amber;
+    } else {
+      legacyTitle = 'RESILIENT CLUB GUARDIAN';
+      legacyBadge = '15-SEASON VETERAN';
+      legacyColor = Colors.orange;
+    }
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) {
+        final theme = Theme.of(ctx);
+        final isDark = theme.brightness == Brightness.dark;
+        final ink = theme.colorScheme.onSurface;
+        final inkMuted = ink.withValues(alpha: 0.65);
+
+        return Dialog(
+          backgroundColor: isDark ? AppPalette.darkSurface : AppPalette.lightSurface,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: const BorderSide(color: AppPalette.gold, width: 2),
+          ),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 440),
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Gold Trophy Icon & Header
+                  Container(
+                    width: 68,
+                    height: 68,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: LinearGradient(
+                        colors: [AppPalette.gold, Colors.amber.shade700],
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppPalette.gold.withValues(alpha: 0.4),
+                          blurRadius: 16,
+                          spreadRadius: 2,
+                        ),
+                      ],
+                    ),
+                    child: const Icon(Icons.emoji_events_rounded, color: Colors.black, size: 40),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'CAREER MODE HALL OF FAME',
+                    style: AppTypography.sectionHeader(AppPalette.gold).copyWith(letterSpacing: 2),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '15-Season Dynasty Concluded',
+                    style: AppTypography.titleLarge(ink).copyWith(fontWeight: FontWeight.w900),
+                  ),
+                  Text(
+                    'Era: ${getSeasonYearLabel(1)} — ${getSeasonYearLabel(15)} (15 Seasons)',
+                    style: AppTypography.caption(inkMuted).copyWith(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 14),
+
+                  // Legacy Tier Card
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 14),
+                    decoration: BoxDecoration(
+                      color: legacyColor.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: legacyColor.withValues(alpha: 0.5)),
+                    ),
+                    child: Column(
+                      children: [
+                        Text(
+                          legacyBadge,
+                          style: AppTypography.caption(legacyColor).copyWith(fontWeight: FontWeight.w800, letterSpacing: 1),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          legacyTitle,
+                          style: AppTypography.titleMedium(ink).copyWith(fontWeight: FontWeight.w900),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 4),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            ClubBadge(code: _userClubCode, size: 20),
+                            const SizedBox(width: 6),
+                            Text(
+                              _userClub,
+                              style: AppTypography.bodySmall(ink).copyWith(fontWeight: FontWeight.bold),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Trophy Cabinet Header
+                  Row(
+                    children: [
+                      const Icon(Icons.workspace_premium_rounded, size: 18, color: AppPalette.gold),
+                      const SizedBox(width: 6),
+                      Text(
+                        'HONOURS & SILVERWARE CABINET',
+                        style: AppTypography.sectionHeader(AppPalette.gold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+
+                  // Trophy Cabinet 2x2 Grid
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildTrophyCabinetCard(
+                          icon: Icons.emoji_events_rounded,
+                          color: AppPalette.gold,
+                          count: _careerLeagueTitles,
+                          label: 'League Titles',
+                          ink: ink,
+                          isDark: isDark,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _buildTrophyCabinetCard(
+                          icon: Icons.stars_rounded,
+                          color: const Color(0xFF4A90E2),
+                          count: _careerUclTitles,
+                          label: 'UCL Titles',
+                          ink: ink,
+                          isDark: isDark,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildTrophyCabinetCard(
+                          icon: Icons.shield_rounded,
+                          color: const Color(0xFFE53935),
+                          count: _careerFaCupTitles,
+                          label: 'FA Cups',
+                          ink: ink,
+                          isDark: isDark,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: _buildTrophyCabinetCard(
+                          icon: Icons.military_tech_rounded,
+                          color: const Color(0xFF00C853),
+                          count: _careerCarabaoCupTitles,
+                          label: 'Carabao Cups',
+                          ink: ink,
+                          isDark: isDark,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+
+                  // Career Totals Banner
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: isDark ? AppPalette.darkSurfaceRaised : AppPalette.lightSurfaceRaised,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: theme.dividerColor),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        _buildCareerRetirementStat(
+                          label: 'TOTAL TROPHIES',
+                          value: '$totalTrophies',
+                          color: AppPalette.gold,
+                          inkMuted: inkMuted,
+                        ),
+                        Container(width: 1, height: 28, color: theme.dividerColor),
+                        _buildCareerRetirementStat(
+                          label: 'SEASONS',
+                          value: '15',
+                          color: ink,
+                          inkMuted: inkMuted,
+                        ),
+                        Container(width: 1, height: 28, color: theme.dividerColor),
+                        _buildCareerRetirementStat(
+                          label: 'PRIZE MONEY',
+                          value: '£${_careerPrizeMoneyEarned.toStringAsFixed(1)}M',
+                          color: AppPalette.green,
+                          inkMuted: inkMuted,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+
+                  // Actions
+                  FilledButton.icon(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppPalette.gold,
+                      foregroundColor: Colors.black,
+                      minimumSize: const Size.fromHeight(46),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      setState(() {
+                        _isConfigured = false;
+                      });
+                    },
+                    icon: const Icon(Icons.replay_rounded, size: 20),
+                    label: const Text(
+                      'START NEW CAREER CAMPAIGN',
+                      style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 0.5),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      minimumSize: const Size.fromHeight(42),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: () => Navigator.pop(ctx),
+                    child: Text('INSPECT CAREER ARCHIVE', style: AppTypography.bodyMedium(ink).copyWith(fontWeight: FontWeight.bold)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildTrophyCabinetCard({
+    required IconData icon,
+    required Color color,
+    required int count,
+    required String label,
+    required Color ink,
+    required bool isDark,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 10),
+      decoration: BoxDecoration(
+        color: isDark ? AppPalette.darkSurfaceRaised : AppPalette.lightSurfaceRaised,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: count > 0 ? 0.5 : 0.2)),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, color: color, size: 24),
+          const SizedBox(height: 4),
+          Text(
+            '$count',
+            style: TextStyle(
+              fontFamily: AppTypography.fontFamily,
+              fontSize: 20,
+              fontWeight: FontWeight.w900,
+              color: count > 0 ? color : ink.withValues(alpha: 0.3),
+            ),
+          ),
+          Text(
+            label,
+            style: TextStyle(
+              fontFamily: AppTypography.fontFamily,
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: ink.withValues(alpha: 0.8),
+            ),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCareerRetirementStat({
+    required String label,
+    required String value,
+    required Color color,
+    required Color inkMuted,
+  }) {
+    return Column(
+      children: [
+        Text(
+          value,
+          style: TextStyle(
+            fontFamily: AppTypography.fontFamily,
+            fontSize: 15,
+            fontWeight: FontWeight.w800,
+            color: color,
+          ),
+        ),
+        Text(
+          label,
+          style: TextStyle(
+            fontFamily: AppTypography.fontFamily,
+            fontSize: 9,
+            fontWeight: FontWeight.w700,
+            color: inkMuted,
+            letterSpacing: 0.5,
+          ),
+        ),
+      ],
     );
   }
 
@@ -5813,7 +6233,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                         children: [
                           Flexible(
                             child: Text(
-                              '${activeLeague.divisionTitle} • S$_currentSeason (GW $_currentGameweek/$_totalGameweeks)',
+                              '${activeLeague.divisionTitle} • ${getSeasonYearLabel(_currentSeason)} (Season $_currentSeason/$kMaxCareerSeasons • GW $_currentGameweek/$_totalGameweeks)',
                               style: AppTypography.caption(inkMuted),
                               overflow: TextOverflow.ellipsis,
                             ),
@@ -7215,7 +7635,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         children: [
           AlmanacCard(
             sectionTitle: _standingsTab == 0
-                ? '${activeLeague.divisionTitle.toUpperCase()} STANDINGS'
+                ? '${activeLeague.divisionTitle.toUpperCase()} ${getSeasonYearLabel(_currentSeason)} STANDINGS'
                 : _standingsTab == 1
                     ? 'LEAGUE TEAM STATS • OVERALL PERFORMANCE'
                     : _standingsTab == 2
@@ -7225,7 +7645,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                             : _standingsTab == 4
                                 ? 'CLEAN SHEETS • DEFENSIVE SHUTOUTS'
                                 : _standingsTab == 5
-                                    ? 'UEFA CHAMPIONS LEAGUE 2026/27'
+                                    ? 'UEFA CHAMPIONS LEAGUE ${getSeasonYearLabel(_currentSeason)}'
                                     : 'DOMESTIC CUPS • BRACKETS & STATS',
             child: Column(
               children: [
@@ -7483,20 +7903,20 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     final hasMultipleComps = hasUcl || hasFa || hasCarabao;
 
     List<MatchResult> currentResultsList = displayLeague;
-    String currentCompName = activeLeague.name.toUpperCase();
+    String currentCompName = '${activeLeague.name.toUpperCase()} ${getSeasonYearLabel(_currentSeason)}';
     MatchResult? currentUserMatch = userLeagueMatch;
 
     if (_resultsCompTab == 1 && hasUcl) {
       currentResultsList = displayUcl;
-      currentCompName = 'UEFA CHAMPIONS LEAGUE';
+      currentCompName = 'UEFA CHAMPIONS LEAGUE ${getSeasonYearLabel(_currentSeason)}';
       currentUserMatch = userUclMatch;
     } else if (_resultsCompTab == 2 && hasFa) {
       currentResultsList = displayFa;
-      currentCompName = 'THE EMIRATES FA CUP';
+      currentCompName = 'THE EMIRATES FA CUP ${getSeasonYearLabel(_currentSeason)}';
       currentUserMatch = userFaMatch;
     } else if (_resultsCompTab == 3 && hasCarabao) {
       currentResultsList = displayCarabao;
-      currentCompName = 'CARABAO CUP';
+      currentCompName = 'CARABAO CUP ${getSeasonYearLabel(_currentSeason)}';
       currentUserMatch = userCarabaoMatch;
     }
 
@@ -7522,7 +7942,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                       ink: ink,
                       inkMuted: inkMuted,
                       activeLeague: activeLeague,
-                      competitionName: activeLeague.name.toUpperCase(),
+                      competitionName: '${activeLeague.name.toUpperCase()} ${getSeasonYearLabel(_currentSeason)}',
                     ),
                   ],
                   if (userUclMatch != null) ...[
@@ -7533,7 +7953,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                       ink: ink,
                       inkMuted: inkMuted,
                       activeLeague: activeLeague,
-                      competitionName: 'UEFA CHAMPIONS LEAGUE',
+                      competitionName: 'UEFA CHAMPIONS LEAGUE ${getSeasonYearLabel(_currentSeason)}',
                     ),
                   ],
                   if (userFaMatch != null) ...[
@@ -7544,7 +7964,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                       ink: ink,
                       inkMuted: inkMuted,
                       activeLeague: activeLeague,
-                      competitionName: 'THE EMIRATES FA CUP',
+                      competitionName: 'THE EMIRATES FA CUP ${getSeasonYearLabel(_currentSeason)}',
                     ),
                   ],
                   if (userCarabaoMatch != null) ...[
@@ -7555,7 +7975,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                       ink: ink,
                       inkMuted: inkMuted,
                       activeLeague: activeLeague,
-                      competitionName: 'CARABAO CUP',
+                      competitionName: 'CARABAO CUP ${getSeasonYearLabel(_currentSeason)}',
                     ),
                   ],
                   const SizedBox(height: 12),
@@ -7836,7 +8256,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         final awayCode = _lookupClubCode(lFix.awayClub, activeLeague);
         matches.add(CareerUpcomingMatch(
           competitionId: 'league',
-          competitionName: activeLeague.name.toUpperCase(),
+          competitionName: '${activeLeague.name.toUpperCase()} ${getSeasonYearLabel(_currentSeason)}',
           competitionShortName: 'LEAGUE',
           competitionColor: AppPalette.gold,
           competitionIcon: Icons.sports_soccer_rounded,
@@ -7911,7 +8331,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         final awayCode = _lookupClubCode(uFix.awayClub, activeLeague);
         matches.add(CareerUpcomingMatch(
           competitionId: 'ucl',
-          competitionName: 'UEFA CHAMPIONS LEAGUE',
+          competitionName: 'UEFA CHAMPIONS LEAGUE ${getSeasonYearLabel(_currentSeason)}',
           competitionShortName: 'UCL',
           competitionColor: const Color(0xFF4A90E2),
           competitionIcon: Icons.stars_rounded,
@@ -7941,7 +8361,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         final awayCode = _lookupClubCode(cFix.awayClub, activeLeague);
         matches.add(CareerUpcomingMatch(
           competitionId: 'carabao_cup',
-          competitionName: 'CARABAO CUP',
+          competitionName: 'CARABAO CUP ${getSeasonYearLabel(_currentSeason)}',
           competitionShortName: 'CARABAO',
           competitionColor: const Color(0xFF00C853),
           competitionIcon: Icons.shield_rounded,
@@ -7970,7 +8390,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         final awayCode = _lookupClubCode(fFix.awayClub, activeLeague);
         matches.add(CareerUpcomingMatch(
           competitionId: 'fa_cup',
-          competitionName: 'THE EMIRATES FA CUP',
+          competitionName: 'THE EMIRATES FA CUP ${getSeasonYearLabel(_currentSeason)}',
           competitionShortName: 'FA CUP',
           competitionColor: const Color(0xFFE53935),
           competitionIcon: Icons.emoji_events_rounded,
@@ -8002,7 +8422,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
           final awayCode = _lookupClubCode(lFix.awayClub, activeLeague);
           return CareerUpcomingMatch(
             competitionId: 'league',
-            competitionName: activeLeague.name.toUpperCase(),
+            competitionName: '${activeLeague.name.toUpperCase()} ${getSeasonYearLabel(_currentSeason)}',
             competitionShortName: 'LEAGUE',
             competitionColor: AppPalette.gold,
             competitionIcon: Icons.sports_soccer_rounded,
@@ -8035,7 +8455,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
             final awayCode = _lookupClubCode(f.awayClub, activeLeague);
             return CareerUpcomingMatch(
               competitionId: 'ucl',
-              competitionName: 'UEFA CHAMPIONS LEAGUE',
+              competitionName: 'UEFA CHAMPIONS LEAGUE ${getSeasonYearLabel(_currentSeason)}',
               competitionShortName: 'UCL',
               competitionColor: const Color(0xFF4A90E2),
               competitionIcon: Icons.stars_rounded,
@@ -8063,7 +8483,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
               final isHome = f.homeClub == _userClub;
               return CareerUpcomingMatch(
                 competitionId: 'ucl',
-                competitionName: 'UEFA CHAMPIONS LEAGUE',
+                competitionName: 'UEFA CHAMPIONS LEAGUE ${getSeasonYearLabel(_currentSeason)}',
                 competitionShortName: 'UCL',
                 competitionColor: const Color(0xFF4A90E2),
                 competitionIcon: Icons.stars_rounded,
@@ -8087,7 +8507,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
               final res = t.leg1.result;
               return CareerUpcomingMatch(
                 competitionId: 'ucl',
-                competitionName: 'UEFA CHAMPIONS LEAGUE',
+                competitionName: 'UEFA CHAMPIONS LEAGUE ${getSeasonYearLabel(_currentSeason)}',
                 competitionShortName: 'UCL',
                 competitionColor: const Color(0xFF4A90E2),
                 competitionIcon: Icons.stars_rounded,
@@ -8117,7 +8537,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
               final isHome = f.homeClub == _userClub;
               return CareerUpcomingMatch(
                 competitionId: 'ucl',
-                competitionName: 'UEFA CHAMPIONS LEAGUE',
+                competitionName: 'UEFA CHAMPIONS LEAGUE ${getSeasonYearLabel(_currentSeason)}',
                 competitionShortName: 'UCL',
                 competitionColor: const Color(0xFF4A90E2),
                 competitionIcon: Icons.stars_rounded,
@@ -8141,7 +8561,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
               final res = t.leg1.result;
               return CareerUpcomingMatch(
                 competitionId: 'ucl',
-                competitionName: 'UEFA CHAMPIONS LEAGUE',
+                competitionName: 'UEFA CHAMPIONS LEAGUE ${getSeasonYearLabel(_currentSeason)}',
                 competitionShortName: 'UCL',
                 competitionColor: const Color(0xFF4A90E2),
                 competitionIcon: Icons.stars_rounded,
@@ -8169,7 +8589,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         final isHome = f.homeClub == _userClub;
         return CareerUpcomingMatch(
           competitionId: 'ucl',
-          competitionName: 'UEFA CHAMPIONS LEAGUE',
+          competitionName: 'UEFA CHAMPIONS LEAGUE ${getSeasonYearLabel(_currentSeason)}',
           competitionShortName: 'UCL',
           competitionColor: const Color(0xFF4A90E2),
           competitionIcon: Icons.stars_rounded,
@@ -8199,7 +8619,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       final awayCode = _lookupClubCode(f.awayClub, activeLeague);
       return CareerUpcomingMatch(
         competitionId: 'fa_cup',
-        competitionName: 'THE EMIRATES FA CUP',
+        competitionName: 'THE EMIRATES FA CUP ${getSeasonYearLabel(_currentSeason)}',
         competitionShortName: 'FA CUP',
         competitionColor: const Color(0xFFE53935),
         competitionIcon: Icons.emoji_events_rounded,
@@ -8226,7 +8646,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       final awayCode = _lookupClubCode(f.awayClub, activeLeague);
       return CareerUpcomingMatch(
         competitionId: 'carabao_cup',
-        competitionName: 'CARABAO CUP',
+        competitionName: 'CARABAO CUP ${getSeasonYearLabel(_currentSeason)}',
         competitionShortName: 'CARABAO',
         competitionColor: const Color(0xFF00C853),
         competitionIcon: Icons.shield_rounded,
@@ -8931,11 +9351,13 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'CAMPAIGN COMPLETE',
+                    _currentSeason >= kMaxCareerSeasons ? '15-SEASON CAREER RETIREMENT' : 'CAMPAIGN COMPLETE',
                     style: AppTypography.sectionHeader(AppPalette.gold),
                   ),
                   Text(
-                    'All $_totalGameweeks matchdays concluded across all competitions. Review final standings and advance.',
+                    _currentSeason >= kMaxCareerSeasons
+                        ? 'Managerial era complete (${getSeasonYearLabel(1)} — ${getSeasonYearLabel(15)}). Review your legendary 15-season honours and enter the Hall of Fame.'
+                        : 'All $_totalGameweeks matchdays concluded across all competitions. Review final standings and advance.',
                     style: AppTypography.bodySmall(inkMuted),
                   ),
                 ],
@@ -8947,7 +9369,10 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                 foregroundColor: Colors.black,
               ),
               onPressed: _advanceSeason,
-              child: const Text('Season Review', style: TextStyle(fontWeight: FontWeight.bold)),
+              child: Text(
+                _currentSeason >= kMaxCareerSeasons ? 'Hall of Fame 🏆' : 'Season Review',
+                style: const TextStyle(fontWeight: FontWeight.bold),
+              ),
             ),
           ],
         ),
@@ -10716,7 +11141,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
           children: [
             const Icon(Icons.emoji_events_rounded, size: 36, color: AppPalette.gold),
             const SizedBox(height: 8),
-            Text('UEFA Champions League 2026/27', style: AppTypography.titleMedium(ink)),
+            Text('UEFA Champions League ${getSeasonYearLabel(_currentSeason)}', style: AppTypography.titleMedium(ink)),
             const SizedBox(height: 4),
             Text('Tournament has not been initialized for this career.', style: AppTypography.caption(inkMuted)),
           ],
@@ -10750,7 +11175,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'UCL 2026/27 CHAMPIONS',
+                        'UCL ${getSeasonYearLabel(_currentSeason)} CHAMPIONS',
                         style: AppTypography.caption(AppPalette.gold).copyWith(fontWeight: FontWeight.w900, letterSpacing: 1),
                       ),
                       Text(
@@ -12005,7 +12430,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        '${currentCup.name.toUpperCase()} 2026/27 WINNER',
+                        '${currentCup.name.toUpperCase()} ${getSeasonYearLabel(_currentSeason)} WINNER',
                         style: AppTypography.caption(AppPalette.gold).copyWith(fontWeight: FontWeight.w900, letterSpacing: 1),
                       ),
                       Text(

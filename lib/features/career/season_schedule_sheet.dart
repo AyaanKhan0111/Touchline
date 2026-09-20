@@ -16,6 +16,7 @@ class SeasonScheduleSheet extends StatefulWidget {
   final String leagueId;
   final int currentGameweek;
   final int totalGameweeks;
+  final int currentSeason;
   final List<List<ScheduledFixture>> schedule;
   final Map<int, List<MatchResult>> seasonResultsArchive;
 
@@ -27,6 +28,7 @@ class SeasonScheduleSheet extends StatefulWidget {
     required this.leagueId,
     required this.currentGameweek,
     required this.totalGameweeks,
+    this.currentSeason = 1,
     required this.schedule,
     required this.seasonResultsArchive,
   });
@@ -106,7 +108,7 @@ class _SeasonScheduleSheetState extends State<SeasonScheduleSheet> {
                         style: AppTypography.sectionHeader(AppPalette.gold),
                       ),
                       Text(
-                        widget.leagueName,
+                        '${widget.leagueName} ${CareerScreen.getSeasonYearLabel(widget.currentSeason)}',
                         style: AppTypography.titleMedium(ink).copyWith(fontWeight: FontWeight.w700),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
