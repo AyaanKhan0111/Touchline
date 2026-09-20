@@ -77,7 +77,7 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
     _loadPlayers();
   }
 
-  String _resolvePlayerClub(Player player, {required bool isOwned, required ContractStatus contractStatus}) {
+  String _resolvePlayerClub(Player player, {required bool isOwned, ContractStatus? contractStatus}) {
     final normName = player.name.trim().toLowerCase();
     if (isOwned) {
       return widget.userClubName;
@@ -85,10 +85,15 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
     if (widget.playerActiveClubs != null && widget.playerActiveClubs!.containsKey(normName)) {
       return widget.playerActiveClubs![normName]!;
     }
-    if (contractStatus.isFreeAgent) {
+    if (player.teamName.isNotEmpty &&
+        player.teamName.trim().toLowerCase() != 'free agent' &&
+        player.teamName.trim().toLowerCase() != 'none') {
+      return player.teamName;
+    }
+    if (contractStatus != null && contractStatus.isFreeAgent) {
       return 'Free Agent';
     }
-    return player.teamName;
+    return 'Free Agent';
   }
 
   bool _matchesSearch(Player p, String qLower) {
@@ -97,12 +102,17 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
     if (p.nationality?.toLowerCase().contains(qLower) ?? false) return true;
     if (p.teamName.toLowerCase().contains(qLower)) return true;
     if (p.primaryPosition.toLowerCase() == qLower) return true;
-    final isOwned = _ownedPlayerNames.contains(p.name.trim().toLowerCase());
+    final normName = p.name.trim().toLowerCase();
+    final isOwned = _ownedPlayerNames.contains(normName);
+    final String? assignedClub = widget.playerActiveClubs != null && widget.playerActiveClubs!.containsKey(normName)
+        ? widget.playerActiveClubs![normName]
+        : (p.teamName.isNotEmpty && p.teamName.trim().toLowerCase() != 'free agent' ? p.teamName : null);
     final contractStatus = TransferMarketService.computePlayerContract(
       p.name,
       widget.currentSeason,
       overall: p.overall,
       age: p.age,
+      currentClub: isOwned ? widget.userClubName : assignedClub,
     );
     final activeClub = _resolvePlayerClub(p, isOwned: isOwned, contractStatus: contractStatus);
     if (activeClub.toLowerCase().contains(qLower)) return true;
@@ -239,11 +249,17 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
 
           for (final r in rows) {
             final p = Player.fromMap(r);
+            final norm = p.name.trim().toLowerCase();
+            if (_ownedPlayerNames.contains(norm)) continue;
+            final assignedClub = widget.playerActiveClubs != null && widget.playerActiveClubs!.containsKey(norm)
+                ? widget.playerActiveClubs![norm]
+                : (p.teamName.trim().isNotEmpty && p.teamName.trim().toLowerCase() != 'free agent' ? p.teamName.trim() : null);
             final status = TransferMarketService.computePlayerContract(
               p.name,
               widget.currentSeason,
               overall: p.overall,
               age: p.age,
+              currentClub: assignedClub,
             );
             if (status.isFreeAgent) {
               loaded.add(p);
@@ -275,11 +291,16 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
 
           for (final r in rows) {
             final p = Player.fromMap(r);
+            final norm = p.name.trim().toLowerCase();
+            final assignedClub = widget.playerActiveClubs != null && widget.playerActiveClubs!.containsKey(norm)
+                ? widget.playerActiveClubs![norm]
+                : (p.teamName.trim().isNotEmpty && p.teamName.trim().toLowerCase() != 'free agent' ? p.teamName.trim() : null);
             final status = TransferMarketService.computePlayerContract(
               p.name,
               widget.currentSeason,
               overall: p.overall,
               age: p.age,
+              currentClub: _ownedPlayerNames.contains(norm) ? widget.userClubName : assignedClub,
             );
             if (status.isExpiring) {
               loaded.add(p);
@@ -887,7 +908,12 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
                           final normName = player.name.trim().toLowerCase();
                           final isOwned = _ownedPlayerNames.contains(normName);
 
-                          final contractStatus = _selectedCategory == MarketCategory.freeAgents
+                          final assignedClub = widget.playerActiveClubs != null && widget.playerActiveClubs!.containsKey(normName)
+                              ? widget.playerActiveClubs![normName]
+                              : (player.teamName.trim().isNotEmpty && player.teamName.trim().toLowerCase() != 'free agent' ? player.teamName.trim() : null);
+                          final hasClub = isOwned || (assignedClub != null && assignedClub.trim().isNotEmpty && assignedClub != 'Free Agent');
+
+                          final contractStatus = (!hasClub && _selectedCategory == MarketCategory.freeAgents)
                               ? const ContractStatus(
                                   seasonsRemaining: 0,
                                   isFreeAgent: true,
@@ -910,6 +936,7 @@ class _TransferMarketSheetState extends State<TransferMarketSheet> {
                                       widget.currentSeason,
                                       overall: player.overall,
                                       age: player.age,
+                                      currentClub: isOwned ? widget.userClubName : assignedClub,
                                     ));
 
                           final baseValuation = calculatePlayerValuation(player);

@@ -141,6 +141,8 @@ class PrefsService {
   static const _keyCareerCustomFormationSlots = 'career_custom_formation_slots';
   static const _keyCareerAiClubSquads = 'career_ai_club_squads';
   static const _keyCareerCompPlayerStats = 'career_comp_player_stats';
+  static const _keyCareerPlayerActiveClubs = 'career_player_active_clubs';
+  static const _keyCareerAiTransferHistory = 'career_ai_transfer_history';
 
   Future<Map<String, dynamic>?> getCareerConfig() async {
     final p = await prefs;
@@ -374,6 +376,24 @@ class PrefsService {
       } catch (_) {}
     }
 
+    final activeClubsRaw = p.getString(_keyCareerPlayerActiveClubs);
+    Map<String, String> playerActiveClubs = {};
+    if (activeClubsRaw != null) {
+      try {
+        final decoded = jsonDecode(activeClubsRaw) as Map<String, dynamic>;
+        playerActiveClubs = decoded.map((k, v) => MapEntry(k.toString(), v.toString()));
+      } catch (_) {}
+    }
+
+    final transferHistoryRaw = p.getString(_keyCareerAiTransferHistory);
+    List<Map<String, dynamic>> aiTransferHistory = [];
+    if (transferHistoryRaw != null) {
+      try {
+        final decoded = jsonDecode(transferHistoryRaw) as List<dynamic>;
+        aiTransferHistory = decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      } catch (_) {}
+    }
+
     return {
       'leagueId': p.getString(_keyCareerLeagueId) ?? 'premier_league',
       'clubName': clubName,
@@ -412,6 +432,8 @@ class PrefsService {
       'playerContracts': playerContracts,
       'customFormationSlots': customFormationSlots,
       'aiClubSquads': aiClubSquads,
+      'playerActiveClubs': playerActiveClubs,
+      'aiTransferHistory': aiTransferHistory,
     };
   }
 
@@ -453,6 +475,8 @@ class PrefsService {
     Map<String, int>? playerContracts,
     Map<String, List<Map<String, dynamic>>>? customFormationSlots,
     Map<String, List<String>>? aiClubSquads,
+    Map<String, String>? playerActiveClubs,
+    List<Map<String, dynamic>>? aiTransferHistory,
   }) async {
     final p = await prefs;
     await p.setString(_keyCareerLeagueId, leagueId);
@@ -545,6 +569,12 @@ class PrefsService {
     if (aiClubSquads != null) {
       await p.setString(_keyCareerAiClubSquads, jsonEncode(aiClubSquads));
     }
+    if (playerActiveClubs != null) {
+      await p.setString(_keyCareerPlayerActiveClubs, jsonEncode(playerActiveClubs));
+    }
+    if (aiTransferHistory != null) {
+      await p.setString(_keyCareerAiTransferHistory, jsonEncode(aiTransferHistory));
+    }
   }
 
   Future<void> clearCareerConfig() async {
@@ -588,5 +618,7 @@ class PrefsService {
     await p.remove(_keyCareerCustomFormationSlots);
     await p.remove(_keyCareerAiClubSquads);
     await p.remove(_keyCareerCompPlayerStats);
+    await p.remove(_keyCareerPlayerActiveClubs);
+    await p.remove(_keyCareerAiTransferHistory);
   }
 }

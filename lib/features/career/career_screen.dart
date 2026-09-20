@@ -478,13 +478,11 @@ class TransferWindowState {
 }
 
 /// Calculates realistic market valuation in millions (£M) based on OVR rating and age (Issue #9)
-double calculatePlayerValuation(Player player) {
-  final ovr = player.overall;
-  final diff = max(0, ovr - 65);
+double calculateRatingValuation(int overall, [int age = 26]) {
+  final diff = max(0, overall - 65);
   final ovrFactor = pow(diff, 2.1) * 0.045;
 
   double ageFactor = 1.0;
-  final age = player.age?.toInt() ?? 26;
   if (age <= 23) {
     ageFactor = 1.2; // Young prospect premium
   } else if (age >= 32) {
@@ -494,6 +492,11 @@ double calculatePlayerValuation(Player player) {
   double val = ovrFactor * ageFactor;
   if (val < 0.5) val = 0.5; // Minimum valuation of £0.5M
   return double.parse(val.toStringAsFixed(1));
+}
+
+/// Calculates realistic market valuation in millions (£M) based on OVR rating and age (Issue #9)
+double calculatePlayerValuation(Player player) {
+  return calculateRatingValuation(player.overall, player.age?.toInt() ?? 26);
 }
 
 /// Calculates sale proceeds in millions (£M) awarded to manager upon selling (90% of valuation)
@@ -537,6 +540,8 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
   final Map<int, List<MatchResult>> _seasonResultsArchive = {};
   final Map<String, List<String>> _aiClubSquads = {};
   final Map<String, List<SimPlayer>> _aiClubPlayers = {};
+  final Map<String, String> _playerActiveClubs = {};
+  final List<Map<String, dynamic>> _aiTransferHistory = [];
   List<List<ScheduledFixture>> _seasonSchedule = [];
 
   // Formation & Tactics (Issue #4 & Fix 31)
@@ -1157,6 +1162,22 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       }
     }
 
+    // Restore saved active club registry
+    final savedActiveClubs = saved['playerActiveClubs'] as Map<dynamic, dynamic>? ?? {};
+    _playerActiveClubs.clear();
+    for (final entry in savedActiveClubs.entries) {
+      _playerActiveClubs[entry.key.toString().trim().toLowerCase()] = entry.value.toString();
+    }
+
+    // Restore saved AI transfer history
+    final savedTransferHistory = saved['aiTransferHistory'] as List<dynamic>? ?? [];
+    _aiTransferHistory.clear();
+    for (final item in savedTransferHistory) {
+      if (item is Map) {
+        _aiTransferHistory.add(Map<String, dynamic>.from(item));
+      }
+    }
+
     // Pre-cache authentic AI club squads for realistic match reports
     await _cacheLeagueClubSquads(db);
 
@@ -1253,11 +1274,204 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         map[name.trim().toLowerCase()] = club;
       }
     });
-    // User club always takes precedence
+    // Explicit recorded transfers and registry take precedence
+    _playerActiveClubs.forEach((name, club) {
+      map[name.trim().toLowerCase()] = club;
+    });
+    // User club always takes ultimate precedence
     for (final p in _userSquad) {
       map[p.name.trim().toLowerCase()] = _userClub;
     }
     return map;
+  }
+
+  /// Hydrates an authentic, balanced, competitive squad for any AI club from database
+  Future<void> _hydrateClubSquad({
+    required Database db,
+    required String club,
+    required Set<String> claimedPlayerNames,
+    List<String> startingPlayerNames = const [],
+  }) async {
+    if (club == _userClub) return;
+
+    final queryClub = club == 'Inter Milan' ? 'Inter' : (club == 'Paris Saint-Germain' ? 'Paris' : club);
+
+    // Determine latest era for this club in database (Fix 37: modern era priority over historical clutter)
+    final seasonResult = await db.rawQuery(
+      'SELECT MAX(season) as max_s FROM players WHERE team_name LIKE ?',
+      ['%$queryClub%'],
+    );
+    final int maxSeason = (seasonResult.first['max_s'] as num?)?.toInt() ?? 2026;
+    final int minSeason = maxSeason - 3; // Modern era window
+
+    // Retain any starting players (e.g. transferred stars)
+    final startingPlayers = <SimPlayer>[];
+    if (startingPlayerNames.isNotEmpty) {
+      final loadedStarting = await _loadSimPlayersForNames(db, startingPlayerNames, club);
+      for (final p in loadedStarting) {
+        final norm = p.name.trim().toLowerCase();
+        claimedPlayerNames.add(norm);
+        startingPlayers.add(p);
+      }
+    }
+
+    Future<List<SimPlayer>> pickClubLine(String positionClause, int targetCount) async {
+      final line = <SimPlayer>[];
+      if (targetCount <= 0) return line;
+
+      // Pass 1: Target modern era players
+      var rows = await db.rawQuery('''
+        WITH ranked AS (
+          SELECT player_name, primary_position, overall, season,
+                 ROW_NUMBER() OVER (PARTITION BY player_name ORDER BY season DESC, overall DESC) as rn
+          FROM players
+          WHERE team_name LIKE ? AND season >= ? AND ($positionClause)
+        )
+        SELECT player_name, primary_position, overall
+        FROM ranked
+        WHERE rn = 1
+        ORDER BY overall DESC
+      ''', ['%$queryClub%', minSeason]);
+
+      for (final r in rows) {
+        final pName = r['player_name'] as String;
+        final norm = pName.trim().toLowerCase();
+        if (!claimedPlayerNames.contains(norm)) {
+          claimedPlayerNames.add(norm);
+          line.add(SimPlayer(
+            name: pName,
+            position: r['primary_position'] as String? ?? 'CM',
+            overall: (r['overall'] as num?)?.toInt() ?? 78,
+            isStarter: false,
+          ));
+          if (line.length == targetCount) return line;
+        }
+      }
+
+      // Pass 2: Fall back to all club records for this specific position if needed
+      if (line.length < targetCount) {
+        rows = await db.rawQuery('''
+          WITH ranked AS (
+            SELECT player_name, primary_position, overall, season,
+                   ROW_NUMBER() OVER (PARTITION BY player_name ORDER BY season DESC, overall DESC) as rn
+            FROM players
+            WHERE team_name LIKE ? AND ($positionClause)
+          )
+          SELECT player_name, primary_position, overall
+          FROM ranked
+          WHERE rn = 1
+          ORDER BY overall DESC
+        ''', ['%$queryClub%']);
+
+        for (final r in rows) {
+          final pName = r['player_name'] as String;
+          final norm = pName.trim().toLowerCase();
+          if (!claimedPlayerNames.contains(norm)) {
+            claimedPlayerNames.add(norm);
+            line.add(SimPlayer(
+              name: pName,
+              position: r['primary_position'] as String? ?? 'CM',
+              overall: (r['overall'] as num?)?.toInt() ?? 78,
+              isStarter: false,
+            ));
+            if (line.length == targetCount) return line;
+          }
+        }
+      }
+
+      return line;
+    }
+
+    final existingGks = startingPlayers.where((p) => p.position == 'GK').length;
+    final existingDefs = startingPlayers.where((p) => SimEngine.isDefender(p.position)).length;
+    final existingMids = startingPlayers.where((p) => SimEngine.isMidfielder(p.position)).length;
+    final existingFwds = startingPlayers.where((p) => SimEngine.isForward(p.position)).length;
+
+    // 1. Pick 2 Goalkeepers
+    final neededGks = max(0, 2 - existingGks);
+    final gks = neededGks > 0 ? await pickClubLine("primary_position = 'GK'", neededGks) : <SimPlayer>[];
+
+    // 2. Pick 6-7 Defenders
+    final neededDefs = max(0, 6 - existingDefs);
+    final defs = <SimPlayer>[];
+    if (neededDefs > 0) {
+      final lbs = await pickClubLine("primary_position IN ('LB', 'LWB')", max(1, neededDefs ~/ 3));
+      final rbs = await pickClubLine("primary_position IN ('RB', 'RWB')", max(1, neededDefs ~/ 3));
+      final cbs = await pickClubLine("primary_position IN ('CB', 'LCB', 'RCB')", max(1, neededDefs - lbs.length - rbs.length));
+      defs.addAll([...lbs, ...cbs, ...rbs]);
+      if (defs.length < neededDefs) {
+        final extraDefs = await pickClubLine("primary_position IN ('CB', 'LB', 'RB', 'LWB', 'RWB')", neededDefs - defs.length);
+        defs.addAll(extraDefs);
+      }
+    }
+
+    // 3. Pick 6 Midfielders
+    final neededMids = max(0, 6 - existingMids);
+    final mids = neededMids > 0
+        ? await pickClubLine("primary_position IN ('CM', 'CAM', 'CDM', 'LM', 'RM', 'LCM', 'RCM', 'LDM', 'RDM', 'AM')", neededMids)
+        : <SimPlayer>[];
+
+    // 4. Pick 4-5 Forwards
+    final neededFwds = max(0, 5 - existingFwds);
+    final fwds = neededFwds > 0
+        ? await pickClubLine("primary_position IN ('ST', 'CF', 'LW', 'RW', 'RF', 'LF', 'SS')", neededFwds)
+        : <SimPlayer>[];
+
+    final rawSimPlayers = <SimPlayer>[...startingPlayers, ...gks, ...defs, ...mids, ...fwds];
+
+    if (rawSimPlayers.length < 16) {
+      final needed = 16 - rawSimPlayers.length;
+      for (int i = 1; i <= needed; i++) {
+        final isGkNeeded = !rawSimPlayers.any((p) => p.position == 'GK');
+        final isDefNeeded = rawSimPlayers.where((p) => SimEngine.isDefender(p.position)).length < 4;
+        final pos = isGkNeeded ? 'GK' : (isDefNeeded ? 'CB' : 'CM');
+        rawSimPlayers.add(SimPlayer(
+          name: '$club Academy #$i',
+          position: pos,
+          overall: 74,
+          isStarter: false,
+        ));
+      }
+    }
+
+    final tacticalAiSquad = SimEngine.normalizeSquadRoles(rawSimPlayers);
+    _aiClubSquads[club] = tacticalAiSquad.map((p) => p.name).toList();
+    _aiClubPlayers[club] = tacticalAiSquad;
+
+    for (final p in tacticalAiSquad) {
+      final norm = p.name.trim().toLowerCase();
+      _playerActiveClubs[norm] = club;
+      _playerContracts.putIfAbsent(p.name, () => 3);
+    }
+  }
+
+  /// Ensures an AI club is hydrated with a full, authentic squad (>= 15 players)
+  Future<void> _ensureClubSquadHydrated(Database db, String club) async {
+    if (club == _userClub) return;
+    if (_aiClubPlayers.containsKey(club) &&
+        _aiClubPlayers[club]!.length >= 15 &&
+        (_aiClubSquads[club]?.length ?? 0) >= 15) {
+      return;
+    }
+    final claimed = <String>{};
+    for (final p in _userSquad) {
+      claimed.add(p.name.trim().toLowerCase());
+    }
+    _aiClubSquads.forEach((c, names) {
+      if (c != club) {
+        for (final n in names) {
+          claimed.add(n.trim().toLowerCase());
+        }
+      }
+    });
+
+    final starting = _aiClubSquads[club] ?? [];
+    await _hydrateClubSquad(
+      db: db,
+      club: club,
+      claimedPlayerNames: claimed,
+      startingPlayerNames: starting,
+    );
   }
 
   /// Caches authentic AI club squads ensuring STRICT global exclusivity (Fix 34)
@@ -1270,6 +1484,9 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     } else {
       allClubsToCache.addAll(UclTournament.kDefaultUclClubs);
     }
+    allClubsToCache.addAll(TransferOfferService.kTier1Clubs);
+    allClubsToCache.addAll(TransferOfferService.kTier2Clubs);
+    allClubsToCache.addAll(_aiClubSquads.keys);
 
     // Step 1: Global set of claimed player names (case-insensitive)
     // The user's squad ALWAYS owns their players first and foremost.
@@ -1278,7 +1495,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       claimedPlayerNames.add(p.name.trim().toLowerCase());
     }
 
-    // Step 2: If AI squads were already saved/loaded, sanitize to guarantee no overlap with user or across AI clubs
+    // Step 2: If AI squads were already saved/loaded, sanitize to guarantee no overlap with user
     for (final club in _aiClubSquads.keys.toList()) {
       if (club == _userClub) {
         _aiClubSquads.remove(club);
@@ -1298,21 +1515,6 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       if (sanitized.length >= 15 && (!_aiClubPlayers.containsKey(club) || _aiClubPlayers[club]!.isEmpty)) {
         _aiClubPlayers[club] = await _loadSimPlayersForNames(db, sanitized, club);
       }
-
-      // Verify positional balance of existing cached squad (Fix 37)
-      final existingPlayers = _aiClubPlayers[club] ?? [];
-      final defCount = existingPlayers.where((p) => SimEngine.isDefender(p.position)).length;
-      final midCount = existingPlayers.where((p) => SimEngine.isMidfielder(p.position)).length;
-      final fwdCount = existingPlayers.where((p) => SimEngine.isForward(p.position)).length;
-      final isUnbalanced = defCount < 3 || midCount < 3 || fwdCount > 6;
-      if (isUnbalanced) {
-        // Discard corrupt/unbalanced legacy squad so it will be regenerated with balanced modern positions in Step 3!
-        for (final n in sanitized) {
-          claimedPlayerNames.remove(n.trim().toLowerCase());
-        }
-        _aiClubSquads.remove(club);
-        _aiClubPlayers.remove(club);
-      }
     }
 
     // Step 3: Populate any unpopulated club or clubs with fewer than 15 players
@@ -1323,123 +1525,127 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
           (_aiClubSquads[club]?.length ?? 0) >= 15) {
         continue;
       }
-
-      final queryClub = club == 'Inter Milan' ? 'Inter' : (club == 'Paris Saint-Germain' ? 'Paris' : club);
-
-      // Determine latest era for this club in database (Fix 37: modern era priority over historical clutter)
-      final seasonResult = await db.rawQuery(
-        'SELECT MAX(season) as max_s FROM players WHERE team_name LIKE ?',
-        ['%$queryClub%'],
+      final starting = _aiClubSquads[club] ?? [];
+      await _hydrateClubSquad(
+        db: db,
+        club: club,
+        claimedPlayerNames: claimedPlayerNames,
+        startingPlayerNames: starting,
       );
-      final int maxSeason = (seasonResult.first['max_s'] as num?)?.toInt() ?? 2026;
-      final int minSeason = maxSeason - 3; // Modern era window
-
-      Future<List<SimPlayer>> pickClubLine(String positionClause, int targetCount) async {
-        final line = <SimPlayer>[];
-
-        // Pass 1: Target modern era players
-        var rows = await db.rawQuery('''
-          WITH ranked AS (
-            SELECT player_name, primary_position, overall, season,
-                   ROW_NUMBER() OVER (PARTITION BY player_name ORDER BY season DESC, overall DESC) as rn
-            FROM players
-            WHERE team_name LIKE ? AND season >= ? AND ($positionClause)
-          )
-          SELECT player_name, primary_position, overall
-          FROM ranked
-          WHERE rn = 1
-          ORDER BY overall DESC
-        ''', ['%$queryClub%', minSeason]);
-
-        for (final r in rows) {
-          final pName = r['player_name'] as String;
-          final norm = pName.trim().toLowerCase();
-          if (!claimedPlayerNames.contains(norm)) {
-            claimedPlayerNames.add(norm);
-            line.add(SimPlayer(
-              name: pName,
-              position: r['primary_position'] as String? ?? 'CM',
-              overall: (r['overall'] as num?)?.toInt() ?? 78,
-              isStarter: false,
-            ));
-            if (line.length == targetCount) return line;
-          }
-        }
-
-        // Pass 2: Fall back to all club records for this specific position if needed
-        if (line.length < targetCount) {
-          rows = await db.rawQuery('''
-            WITH ranked AS (
-              SELECT player_name, primary_position, overall, season,
-                     ROW_NUMBER() OVER (PARTITION BY player_name ORDER BY season DESC, overall DESC) as rn
-              FROM players
-              WHERE team_name LIKE ? AND ($positionClause)
-            )
-            SELECT player_name, primary_position, overall
-            FROM ranked
-            WHERE rn = 1
-            ORDER BY overall DESC
-          ''', ['%$queryClub%']);
-
-          for (final r in rows) {
-            final pName = r['player_name'] as String;
-            final norm = pName.trim().toLowerCase();
-            if (!claimedPlayerNames.contains(norm)) {
-              claimedPlayerNames.add(norm);
-              line.add(SimPlayer(
-                name: pName,
-                position: r['primary_position'] as String? ?? 'CM',
-                overall: (r['overall'] as num?)?.toInt() ?? 78,
-                isStarter: false,
-              ));
-              if (line.length == targetCount) return line;
-            }
-          }
-        }
-
-        return line;
-      }
-
-      // 1. Pick 2 Goalkeepers
-      final gks = await pickClubLine("primary_position = 'GK'", 2);
-
-      // 2. Pick 6-7 Defenders with full-back and centre-back distribution
-      final lbs = await pickClubLine("primary_position IN ('LB', 'LWB')", 2);
-      final rbs = await pickClubLine("primary_position IN ('RB', 'RWB')", 2);
-      final cbs = await pickClubLine("primary_position IN ('CB', 'LCB', 'RCB')", 3);
-      final defs = [...lbs, ...cbs, ...rbs];
-      if (defs.length < 6) {
-        final extraDefs = await pickClubLine("primary_position IN ('CB', 'LB', 'RB', 'LWB', 'RWB')", 6 - defs.length);
-        defs.addAll(extraDefs);
-      }
-
-      // 3. Pick 6 Midfielders (balanced holding, central, attacking)
-      final mids = await pickClubLine("primary_position IN ('CM', 'CAM', 'CDM', 'LM', 'RM', 'LCM', 'RCM', 'LDM', 'RDM', 'AM')", 6);
-
-      // 4. Pick 4-5 Forwards / Attackers (wingers and central strikers)
-      final fwds = await pickClubLine("primary_position IN ('ST', 'CF', 'LW', 'RW', 'RF', 'LF', 'SS')", 5);
-
-      final rawSimPlayers = <SimPlayer>[...gks, ...defs, ...mids, ...fwds];
-
-      if (rawSimPlayers.length < 16) {
-        final needed = 16 - rawSimPlayers.length;
-        for (int i = 1; i <= needed; i++) {
-          final isGkNeeded = !rawSimPlayers.any((p) => p.position == 'GK');
-          final isDefNeeded = rawSimPlayers.where((p) => SimEngine.isDefender(p.position)).length < 4;
-          final pos = isGkNeeded ? 'GK' : (isDefNeeded ? 'CB' : 'CM');
-          rawSimPlayers.add(SimPlayer(
-            name: '$club Academy #$i',
-            position: pos,
-            overall: 74,
-            isStarter: false,
-          ));
-        }
-      }
-
-      final tacticalAiSquad = SimEngine.normalizeSquadRoles(rawSimPlayers);
-      _aiClubSquads[club] = tacticalAiSquad.map((p) => p.name).toList();
-      _aiClubPlayers[club] = tacticalAiSquad;
     }
+
+    // Step 4: Synchronize global player active club registry
+    _aiClubSquads.forEach((club, names) {
+      for (final name in names) {
+        _playerActiveClubs[name.trim().toLowerCase()] = club;
+      }
+    });
+    for (final p in _userSquad) {
+      _playerActiveClubs[p.name.trim().toLowerCase()] = _userClub;
+    }
+  }
+
+  /// Simulates realistic transfers between AI clubs during open transfer windows (FIFA / EA Sports FC style)
+  Future<void> _simulateAiTransferMarket(Database db) async {
+    final windowState = TransferWindowState.compute(
+      gameweek: _currentGameweek,
+      totalGameweeks: _totalGameweeks,
+    );
+    if (!windowState.isOpen) return;
+
+    final rand = Random();
+    // 65% chance of an AI-to-AI transfer occurring on this matchday
+    if (rand.nextDouble() > 0.65) return;
+
+    final potentialBuyers = [
+      ...TransferOfferService.kTier1Clubs,
+      ...TransferOfferService.kTier2Clubs,
+      ..._leagueClubs,
+    ].where((c) => c != _userClub).toSet().toList();
+
+    if (potentialBuyers.isEmpty) return;
+    potentialBuyers.shuffle(rand);
+    final buyerClub = potentialBuyers.first;
+
+    // Ensure buyer squad is hydrated
+    await _ensureClubSquadHydrated(db, buyerClub);
+
+    final potentialSellers = _aiClubSquads.keys
+        .where((c) => c != _userClub && c != buyerClub && (_aiClubSquads[c]?.length ?? 0) >= 16)
+        .toList();
+
+    if (potentialSellers.isEmpty) return;
+    potentialSellers.shuffle(rand);
+    final sellerClub = potentialSellers.first;
+
+    final sellerPlayers = _aiClubPlayers[sellerClub];
+    if (sellerPlayers == null || sellerPlayers.length < 16) return;
+
+    // Pick an outfield candidate player from seller (not GK, not in user squad, not academy)
+    final userSquadNames = _userSquad.map((p) => p.name.trim().toLowerCase()).toSet();
+    final candidates = sellerPlayers
+        .where((p) =>
+            p.position != 'GK' &&
+            !userSquadNames.contains(p.name.trim().toLowerCase()) &&
+            !p.name.contains('Academy') &&
+            p.overall >= 74)
+        .toList();
+
+    if (candidates.isEmpty) return;
+    candidates.shuffle(rand);
+    final transferredPlayer = candidates.first;
+
+    final normName = transferredPlayer.name.trim().toLowerCase();
+
+    // 1. Remove from seller
+    _aiClubSquads[sellerClub]?.removeWhere((n) => n.trim().toLowerCase() == normName);
+    _aiClubPlayers[sellerClub]?.removeWhere((p) => p.name.trim().toLowerCase() == normName);
+    if ((_aiClubSquads[sellerClub]?.length ?? 0) < 15) {
+      final fillerName = '$sellerClub Academy #${rand.nextInt(900) + 100}';
+      _aiClubSquads[sellerClub]?.add(fillerName);
+      _aiClubPlayers[sellerClub]?.add(SimPlayer(
+        name: fillerName,
+        position: transferredPlayer.position,
+        overall: 74,
+        isStarter: false,
+      ));
+    }
+    if (_aiClubPlayers[sellerClub] != null) {
+      _aiClubPlayers[sellerClub] = SimEngine.normalizeSquadRoles(_aiClubPlayers[sellerClub]!);
+    }
+
+    // 2. Add to buyer
+    _aiClubSquads.putIfAbsent(buyerClub, () => []);
+    _aiClubPlayers.putIfAbsent(buyerClub, () => []);
+    _aiClubSquads[buyerClub]!.removeWhere((n) => n.trim().toLowerCase() == normName);
+    _aiClubSquads[buyerClub]!.insert(0, transferredPlayer.name);
+
+    _aiClubPlayers[buyerClub]!.removeWhere((p) => p.name.trim().toLowerCase() == normName);
+    _aiClubPlayers[buyerClub]!.insert(0, SimPlayer(
+      name: transferredPlayer.name,
+      position: transferredPlayer.position,
+      overall: transferredPlayer.overall,
+      isStarter: true,
+    ));
+    _aiClubPlayers[buyerClub] = SimEngine.normalizeSquadRoles(_aiClubPlayers[buyerClub]!);
+
+    // 3. Update global contract & active club
+    final contractYears = 3 + rand.nextInt(3); // 3 to 5 seasons
+    _playerContracts[transferredPlayer.name] = contractYears;
+    _playerActiveClubs[normName] = buyerClub;
+
+    // 4. Calculate realistic fee & log transfer
+    final fee = calculateRatingValuation(transferredPlayer.overall);
+
+    _aiTransferHistory.insert(0, {
+      'player': transferredPlayer.name,
+      'from': sellerClub,
+      'to': buyerClub,
+      'fee': fee,
+      'season': _currentSeason,
+      'gameweek': _currentGameweek,
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+    });
   }
 
   /// Tactically sorts squad so:
@@ -2299,6 +2505,12 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       valuationCalculator: calculatePlayerValuation,
     );
 
+    // Simulate AI club to AI club market transfers during window (FIFA / EA Sports FC style)
+    if (windowState.isOpen) {
+      final db = await DatabaseService.instance.database;
+      await _simulateAiTransferMarket(db);
+    }
+
     // Evaluate dynamic squad events (Fix 29 / User Fix 7)
     final squadEventResult = SquadEventService.evaluateMatchdaySquadEvents(
       userSquad: _userSquad,
@@ -2544,6 +2756,8 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         (k, v) => MapEntry(k, v.map((s) => s.toJson()).toList()),
       ),
       aiClubSquads: _aiClubSquads,
+      playerActiveClubs: _playerActiveClubs,
+      aiTransferHistory: _aiTransferHistory,
     );
 
     final statePayload = <String, dynamic>{
@@ -2589,6 +2803,8 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       'activeSquadEvents': activeEventsList,
       'playerContracts': _playerContracts,
       'aiClubSquads': _aiClubSquads,
+      'playerActiveClubs': _playerActiveClubs,
+      'aiTransferHistory': _aiTransferHistory,
     };
 
     // 2. Dual-layer persistence: SQLite touchline_save.db career_save table (Issue #10)
@@ -3148,23 +3364,70 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
               backgroundColor: AppPalette.green,
               foregroundColor: Colors.white,
             ),
-            onPressed: () {
+            onPressed: () async {
               Navigator.pop(ctx);
               SoundService.instance.playClick();
+
+              final db = await DatabaseService.instance.database;
+              final candidates = [
+                ...TransferOfferService.kTier1Clubs,
+                ...TransferOfferService.kTier2Clubs,
+                ..._leagueClubs,
+              ].where((c) => c != _userClub && TransferOfferService.canClubApproachPlayer(club: c, player: player, userClub: _userClub)).toList();
+              final buyer = candidates.isNotEmpty ? (candidates..shuffle()).first : 'Free Agent';
+
+              if (buyer != 'Free Agent') {
+                await _ensureClubSquadHydrated(db, buyer);
+                final norm = player.name.trim().toLowerCase();
+                _aiClubSquads.putIfAbsent(buyer, () => []);
+                _aiClubSquads[buyer]!.removeWhere((n) => n.trim().toLowerCase() == norm);
+                _aiClubSquads[buyer]!.insert(0, player.name);
+
+                _aiClubPlayers.putIfAbsent(buyer, () => []);
+                _aiClubPlayers[buyer]!.removeWhere((p) => p.name.trim().toLowerCase() == norm);
+                _aiClubPlayers[buyer]!.insert(0, SimPlayer(
+                  name: player.name,
+                  position: player.primaryPosition,
+                  overall: player.overall,
+                  isStarter: true,
+                ));
+                _aiClubPlayers[buyer] = SimEngine.normalizeSquadRoles(_aiClubPlayers[buyer]!);
+
+                _playerContracts[player.name] = 3;
+                _playerActiveClubs[norm] = buyer;
+
+                _aiTransferHistory.insert(0, {
+                  'player': player.name,
+                  'from': _userClub,
+                  'to': buyer,
+                  'fee': proceeds,
+                  'season': _currentSeason,
+                  'gameweek': _currentGameweek,
+                  'timestamp': DateTime.now().millisecondsSinceEpoch,
+                });
+              } else {
+                _playerActiveClubs.remove(player.name.trim().toLowerCase());
+                _playerContracts.remove(player.name);
+              }
+
               setState(() {
                 _budgetMillions += proceeds;
                 _userSquad.removeAt(index);
               });
-              _persistCareerState();
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  backgroundColor: AppPalette.green,
-                  content: Text(
-                    'Sold ${player.name} for +£${proceeds.toStringAsFixed(1)}M! Transfer budget updated.',
-                    style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+              await _persistCareerState();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    backgroundColor: AppPalette.green,
+                    content: Text(
+                      buyer != 'Free Agent'
+                          ? '${player.name} transferred to $buyer for +£${proceeds.toStringAsFixed(1)}M!'
+                          : 'Sold ${player.name} for +£${proceeds.toStringAsFixed(1)}M!',
+                      style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+                    ),
                   ),
-                ),
-              );
+                );
+              }
             },
             child: Text('Confirm Sale (+£${proceeds.toStringAsFixed(1)}M)',
                 style: const TextStyle(fontWeight: FontWeight.bold)),
@@ -3187,7 +3450,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
   }
 
   /// Accepts an incoming AI club transfer bid, selling the player for the offered fee (Fix 28 / User Fix 6)
-  void _acceptTransferOffer(TransferOffer offer) {
+  Future<void> _acceptTransferOffer(TransferOffer offer) async {
     if (_userSquad.length <= 11) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -3227,22 +3490,42 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     }
 
     final buyingClub = offer.buyingClub;
-    if (_aiClubSquads.containsKey(buyingClub)) {
-      _aiClubSquads[buyingClub]!.removeWhere((n) => n.trim().toLowerCase() == player.name.trim().toLowerCase());
-      _aiClubSquads[buyingClub]!.insert(0, player.name);
-    } else {
-      _aiClubSquads[buyingClub] = [player.name];
-    }
-    if (_aiClubPlayers.containsKey(buyingClub)) {
-      _aiClubPlayers[buyingClub]!.removeWhere((p) => p.name.trim().toLowerCase() == player.name.trim().toLowerCase());
-      _aiClubPlayers[buyingClub]!.insert(0, SimPlayer(
-        name: player.name,
-        position: player.primaryPosition,
-        overall: player.overall,
-        isStarter: true,
-      ));
-      _aiClubPlayers[buyingClub] = SimEngine.normalizeSquadRoles(_aiClubPlayers[buyingClub]!);
-    }
+    final db = await DatabaseService.instance.database;
+
+    // 1. Ensure buying club has a fully hydrated squad
+    await _ensureClubSquadHydrated(db, buyingClub);
+
+    final normName = player.name.trim().toLowerCase();
+
+    // 2. Add player to buying club squad
+    _aiClubSquads.putIfAbsent(buyingClub, () => []);
+    _aiClubSquads[buyingClub]!.removeWhere((n) => n.trim().toLowerCase() == normName);
+    _aiClubSquads[buyingClub]!.insert(0, player.name);
+
+    _aiClubPlayers.putIfAbsent(buyingClub, () => []);
+    _aiClubPlayers[buyingClub]!.removeWhere((p) => p.name.trim().toLowerCase() == normName);
+    _aiClubPlayers[buyingClub]!.insert(0, SimPlayer(
+      name: player.name,
+      position: player.primaryPosition,
+      overall: player.overall,
+      isStarter: true,
+    ));
+    _aiClubPlayers[buyingClub] = SimEngine.normalizeSquadRoles(_aiClubPlayers[buyingClub]!);
+
+    // 3. Assign 4-year contract and update active club
+    _playerContracts[player.name] = 4;
+    _playerActiveClubs[normName] = buyingClub;
+
+    // 4. Record transfer in history
+    _aiTransferHistory.insert(0, {
+      'player': player.name,
+      'from': _userClub,
+      'to': buyingClub,
+      'fee': offer.offeredFeeMillions,
+      'season': _currentSeason,
+      'gameweek': _currentGameweek,
+      'timestamp': DateTime.now().millisecondsSinceEpoch,
+    });
 
     SoundService.instance.playGoal();
     setState(() {
@@ -3250,17 +3533,19 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       _userSquad.removeAt(playerIndex);
       _pendingTransferOffers.removeWhere((o) => o.id == offer.id);
     });
-    _persistCareerState();
+    await _persistCareerState();
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        backgroundColor: AppPalette.green,
-        content: Text(
-          'Deal Agreed! ${offer.playerName} transferred to ${offer.buyingClub} for +£${offer.offeredFeeMillions.toStringAsFixed(1)}M!',
-          style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: AppPalette.green,
+          content: Text(
+            'Deal Agreed! ${offer.playerName} transferred to ${offer.buyingClub} on a 4-year contract for +£${offer.offeredFeeMillions.toStringAsFixed(1)}M!',
+            style: const TextStyle(fontWeight: FontWeight.bold, color: Colors.white),
+          ),
         ),
-      ),
-    );
+      );
+    }
   }
 
   /// Rejects an incoming AI club transfer bid (Fix 28 / User Fix 6)
@@ -3306,11 +3591,40 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         playerActiveClubs: _buildPlayerActiveClubs(),
         onSignPlayer: (player, fee, [int contractYears = 3]) {
           SoundService.instance.playCorrect();
+          final normName = player.name.trim().toLowerCase();
+
+          // Identify previous club before removing
+          String fromClub = 'Free Agent';
+          if (_playerActiveClubs.containsKey(normName)) {
+            fromClub = _playerActiveClubs[normName]!;
+          } else {
+            for (final entry in _aiClubSquads.entries) {
+              if (entry.value.any((n) => n.trim().toLowerCase() == normName)) {
+                fromClub = entry.key;
+                break;
+              }
+            }
+            if (fromClub == 'Free Agent' && player.teamName.isNotEmpty) {
+              fromClub = player.teamName;
+            }
+          }
+
           setState(() {
             _budgetMillions = max(0.0, _budgetMillions - fee);
             _userSquad.add(player);
             _playerContracts[player.name] = contractYears;
+            _playerActiveClubs[normName] = _userClub;
             _removePlayerFromAiClubs(player.name);
+
+            _aiTransferHistory.insert(0, {
+              'player': player.name,
+              'from': fromClub,
+              'to': _userClub,
+              'fee': fee,
+              'season': _currentSeason,
+              'gameweek': _currentGameweek,
+              'timestamp': DateTime.now().millisecondsSinceEpoch,
+            });
           });
           _persistCareerState();
         },

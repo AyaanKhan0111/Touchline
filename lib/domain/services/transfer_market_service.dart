@@ -78,7 +78,17 @@ class TransferMarketService {
     int currentSeason, {
     int? overall,
     double? age,
+    String? currentClub,
+    int? overrideContractYears,
   }) {
+    if (overrideContractYears != null && overrideContractYears > 0) {
+      return ContractStatus.fromSeasons(overrideContractYears);
+    }
+
+    final hasActiveClub = currentClub != null &&
+        currentClub.trim().isNotEmpty &&
+        currentClub.trim().toLowerCase() != 'free agent';
+
     final normName = playerName.trim().toLowerCase();
     final baseSeed = (normName.hashCode.abs() ^ 0x3C6EF35F);
     final roll = baseSeed % 100;
@@ -88,7 +98,7 @@ class TransferMarketService {
     // 1. Initial contract duration in Season 1 based on player rating tier and age
     int remaining;
     if (ovr >= 87) {
-      if (pAge >= 35 && roll == 99) {
+      if (!hasActiveClub && pAge >= 35 && roll == 99) {
         remaining = 0; // Extremely rare veteran free agent
       } else if (roll < 6) {
         remaining = 1; // 1 Year Expiring Contract (6%)
@@ -100,7 +110,7 @@ class TransferMarketService {
         remaining = 4; // 4+ Years Contract (24%)
       }
     } else if (ovr >= 83) {
-      if (pAge >= 33 && roll < 2) {
+      if (!hasActiveClub && pAge >= 33 && roll < 2) {
         remaining = 0; // Rare veteran free agent (2%)
       } else if (roll < 10) {
         remaining = 1; // 1 Year Expiring (8-10%)
@@ -112,7 +122,7 @@ class TransferMarketService {
         remaining = 4; // 4+ Years (18%)
       }
     } else if (ovr >= 79) {
-      if (roll < 4) {
+      if (!hasActiveClub && roll < 4) {
         remaining = 0; // Free agent (4%)
       } else if (roll < 16) {
         remaining = 1; // 1 Year Expiring (12%)
@@ -124,7 +134,7 @@ class TransferMarketService {
         remaining = 4; // 4+ Years (12%)
       }
     } else if (ovr >= 74) {
-      if (roll < 7) {
+      if (!hasActiveClub && roll < 7) {
         remaining = 0; // Free agent (7%)
       } else if (roll < 24) {
         remaining = 1; // 1 Year Expiring (17%)
@@ -135,7 +145,7 @@ class TransferMarketService {
       }
     } else {
       // Lower tier (< 74 OVR)
-      if (roll < 12) {
+      if (!hasActiveClub && roll < 12) {
         remaining = 0; // Free agent (12%)
       } else if (roll < 32) {
         remaining = 1; // 1 Year Expiring (20%)
@@ -152,7 +162,7 @@ class TransferMarketService {
         // Player was a Free Agent: May be signed by a club or remain unattached
         final pickupSeed = (baseSeed + s * 4397) % 100;
         final pPickup = ovr >= 85 ? 85 : (ovr >= 80 ? 70 : (ovr >= 74 ? 50 : 35));
-        if (pickupSeed < pPickup) {
+        if (pickupSeed < pPickup || hasActiveClub) {
           remaining = ovr >= 80 ? 2 : 1; // Signed a 1-2 year deal
         }
       } else {
@@ -165,7 +175,7 @@ class TransferMarketService {
           if (pAge + s >= 33) {
             pRenew -= 15; // Veterans slightly less likely to renew long-term
           }
-          if (renewSeed < pRenew) {
+          if (renewSeed < pRenew || hasActiveClub) {
             // Signed contract renewal!
             remaining = ovr >= 83 ? 3 : 2;
           } else {
@@ -174,6 +184,11 @@ class TransferMarketService {
           }
         }
       }
+    }
+
+    // Absolute guarantee: Any player currently owned by an active club has a contract
+    if (hasActiveClub && remaining <= 0) {
+      remaining = ovr >= 83 ? 3 : 2;
     }
 
     return ContractStatus.fromSeasons(remaining);

@@ -4900,6 +4900,113 @@ void main() {
       expect(fixtures[3].leagueGameweek, equals(8));
     });
   });
+
+  group('Reciprocal Transfers & Persistent Club Squad Integrity', () {
+    test('computePlayerContract never treats a club-affiliated player as a free agent', () {
+      // Find a player name that would hash to free agent if currentClub was null
+      String? freeAgentCandidate;
+      for (int i = 0; i < 100; i++) {
+        final candidate = 'Player $i';
+        final status = TransferMarketService.computePlayerContract(candidate, 1);
+        if (status.isFreeAgent) {
+          freeAgentCandidate = candidate;
+          break;
+        }
+      }
+
+      expect(freeAgentCandidate, isNotNull, reason: 'Should find at least one candidate hashing to free agent');
+
+      // Unaffiliated: isFreeAgent is true
+      final unaffiliatedStatus = TransferMarketService.computePlayerContract(freeAgentCandidate!, 1);
+      expect(unaffiliatedStatus.isFreeAgent, isTrue);
+
+      // Affiliated with an AI club: isFreeAgent MUST BE FALSE
+      final affiliatedStatus = TransferMarketService.computePlayerContract(
+        freeAgentCandidate,
+        1,
+        currentClub: 'Real Madrid',
+      );
+      expect(affiliatedStatus.isFreeAgent, isFalse);
+      expect(affiliatedStatus.seasonsRemaining, greaterThanOrEqualTo(1));
+      expect(affiliatedStatus.statusBadge, isNot(contains('FREE AGENT')));
+
+      // With overrideContractYears
+      final overrideStatus = TransferMarketService.computePlayerContract(
+        freeAgentCandidate,
+        1,
+        currentClub: 'Paris Saint-Germain',
+        overrideContractYears: 4,
+      );
+      expect(overrideStatus.isFreeAgent, isFalse);
+      expect(overrideStatus.seasonsRemaining, equals(4));
+    });
+
+    test('PrefsService stores and retrieves playerActiveClubs and aiTransferHistory', () async {
+      SharedPreferences.setMockInitialValues({});
+      final prefs = PrefsService.instance;
+
+      final activeClubs = {
+        'bruno fernandes': 'Real Madrid',
+        'marcus rashford': 'Paris Saint-Germain',
+        'bukayo saka': 'Arsenal',
+      };
+
+      final transferHistory = [
+        {
+          'player': 'Bruno Fernandes',
+          'from': 'Manchester United',
+          'to': 'Real Madrid',
+          'fee': 65.0,
+          'season': 1,
+          'gameweek': 3,
+          'timestamp': 1700000000,
+        },
+      ];
+
+      await prefs.saveCareerConfig(
+        leagueId: 'premier_league',
+        clubName: 'Manchester United',
+        clubCode: 'MUN',
+        isCustomClub: false,
+        squadMode: 'current',
+        budget: 120.0,
+        season: 1,
+        gameweek: 3,
+        squadIds: ['David Raya', 'Gabriel'],
+        playerActiveClubs: activeClubs,
+        aiTransferHistory: transferHistory,
+      );
+
+      final loaded = await prefs.getCareerConfig();
+      expect(loaded, isNotNull);
+      expect(loaded!['playerActiveClubs'], equals(activeClubs));
+      expect(loaded['aiTransferHistory'], isNotNull);
+      final loadedHistory = (loaded['aiTransferHistory'] as List).cast<Map<String, dynamic>>();
+      expect(loadedHistory.length, equals(1));
+      expect(loadedHistory.first['player'], equals('Bruno Fernandes'));
+      expect(loadedHistory.first['to'], equals('Real Madrid'));
+    });
+
+    test('Sold player is assigned to buyer club squad and not left as a free agent', () {
+      final buyerClub = 'Bayern Munich';
+      final soldPlayer = 'Casemiro';
+      final activeClubs = <String, String>{};
+
+      // Register transfer
+      activeClubs[soldPlayer.toLowerCase()] = buyerClub;
+
+      final status = TransferMarketService.computePlayerContract(
+        soldPlayer,
+        1,
+        currentClub: activeClubs[soldPlayer.toLowerCase()],
+        overrideContractYears: 4,
+      );
+
+      expect(status.isFreeAgent, isFalse);
+      expect(status.seasonsRemaining, equals(4));
+      expect(activeClubs[soldPlayer.toLowerCase()], equals('Bayern Munich'));
+    });
+  });
 }
 
 
