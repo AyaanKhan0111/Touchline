@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:touchline/core/theme/app_palette.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:touchline/core/database/save_service.dart';
 import 'package:touchline/core/storage/prefs_service.dart';
@@ -5005,6 +5006,203 @@ void main() {
       expect(status.isFreeAgent, isFalse);
       expect(status.seasonsRemaining, equals(4));
       expect(activeClubs[soldPlayer.toLowerCase()], equals('Bayern Munich'));
+    });
+  });
+
+  group('Squad Selection Warning & Varied Unavailability System (EA Sports FC Style)', () {
+    test('SquadEventType fromKey parses suspension and fatigue with backwards compatibility', () {
+      expect(SquadEventType.fromKey('suspension'), equals(SquadEventType.suspension));
+      expect(SquadEventType.fromKey('fatigue'), equals(SquadEventType.fatigue));
+      expect(SquadEventType.fromKey('personal_leave'), equals(SquadEventType.personalLeave));
+      expect(SquadEventType.fromKey('international_duty'), equals(SquadEventType.internationalDuty));
+      expect(SquadEventType.fromKey('injury'), equals(SquadEventType.injury));
+      expect(SquadEventType.fromKey('unknown_type'), equals(SquadEventType.injury));
+    });
+
+    test('SquadEvent serializes estimatedDays and formats timeline realistically', () {
+      final shortEvent = SquadEvent(
+        id: 'event_short',
+        playerName: 'Bukayo Saka',
+        type: SquadEventType.injury,
+        title: 'Grade 1 Hamstring Strain',
+        description: 'Muscular tightness in training.',
+        durationGameweeks: 2,
+        remainingGameweeks: 2,
+        startGameweek: 5,
+        startSeason: 1,
+        severity: 'moderate',
+        estimatedDays: 14,
+        date: DateTime.now(),
+      );
+
+      expect(shortEvent.formattedTimeline, equals('2 matches (~14 days)'));
+      expect(shortEvent.badgeLabel, contains('INJURED'));
+      expect(shortEvent.badgeColor, equals(AppPalette.coral));
+
+      final serialized = shortEvent.toMap();
+      expect(serialized['estimatedDays'], equals(14));
+      expect(serialized['type'], equals('injury'));
+
+      final deserialized = SquadEvent.fromMap(serialized);
+      expect(deserialized.estimatedDays, equals(14));
+      expect(deserialized.type, equals(SquadEventType.injury));
+
+      final longEvent = SquadEvent(
+        id: 'event_long',
+        playerName: 'Rodri',
+        type: SquadEventType.injury,
+        title: 'Anterior Cruciate Ligament (ACL) Rupture',
+        description: 'Undergoing knee reconstruction surgery.',
+        durationGameweeks: 16,
+        remainingGameweeks: 16,
+        startGameweek: 2,
+        startSeason: 1,
+        severity: 'critical',
+        estimatedDays: 112,
+        date: DateTime.now(),
+      );
+
+      expect(longEvent.formattedTimeline, contains('~4 months'));
+
+      final suspensionEvent = SquadEvent(
+        id: 'event_susp',
+        playerName: 'Cristian Romero',
+        type: SquadEventType.suspension,
+        title: 'Red Card Suspension (Violent Conduct)',
+        description: 'Serving 3-match FA disciplinary ban.',
+        durationGameweeks: 3,
+        remainingGameweeks: 3,
+        startGameweek: 8,
+        startSeason: 1,
+        severity: 'severe',
+        estimatedDays: 21,
+        date: DateTime.now(),
+      );
+
+      expect(suspensionEvent.type, equals(SquadEventType.suspension));
+      expect(suspensionEvent.badgeLabel, contains('SUSPENDED'));
+      expect(suspensionEvent.formattedTimeline, equals('3 matches (~21 days)'));
+    });
+
+    test('getIneligibleStarters strictly flags starters (0..10) and ignores bench (11+)', () {
+      final mockSquad = List.generate(
+        18,
+        (i) => Player(
+          mode: 'Career',
+          squadId: 'sq_1',
+          teamCode: 'ARS',
+          teamName: 'Arsenal',
+          season: 1,
+          playerId: 'p_$i',
+          name: 'Player $i',
+          overall: 80,
+          displayPosition: i == 0 || i == 11 ? 'GK' : 'CM',
+          primaryPosition: i == 0 || i == 11 ? 'GK' : 'CM',
+          allPositions: 'CM',
+          pace: 75,
+          shooting: 75,
+          passing: 75,
+          dribbling: 75,
+          defending: 75,
+          physicality: 75,
+          isGoalkeeper: i == 0 || i == 11,
+        ),
+      );
+
+      final activeEvents = [
+        SquadEvent(
+          id: 'ev_starter',
+          playerName: 'Player 3', // In Starting XI (index 3)
+          type: SquadEventType.injury,
+          title: 'Adductor Groin Pull',
+          description: 'Resting to prevent tear.',
+          durationGameweeks: 2,
+          remainingGameweeks: 2,
+          startGameweek: 1,
+          startSeason: 1,
+          date: DateTime.now(),
+        ),
+        SquadEvent(
+          id: 'ev_bench',
+          playerName: 'Player 14', // On bench (index 14)
+          type: SquadEventType.personalLeave,
+          title: 'Paternity Leave',
+          description: 'Authorized leave.',
+          durationGameweeks: 1,
+          remainingGameweeks: 1,
+          startGameweek: 1,
+          startSeason: 1,
+          date: DateTime.now(),
+        ),
+      ];
+
+      final ineligible = SquadEventService.getIneligibleStarters(
+        squad: mockSquad,
+        activeEvents: activeEvents,
+      );
+
+      // Only Player 3 should be flagged, Player 14 is on the bench so does not block simulation
+      expect(ineligible.length, equals(1));
+      expect(ineligible.first.name, equals('Player 3'));
+    });
+
+    test('autoReplaceUnavailableStarters safely swaps unavailable starter with bench player', () {
+      final mockSquad = List.generate(
+        18,
+        (i) => Player(
+          mode: 'Career',
+          squadId: 'sq_1',
+          teamCode: 'ARS',
+          teamName: 'Arsenal',
+          season: 1,
+          playerId: 'p_$i',
+          name: 'Player $i',
+          overall: 80 - i,
+          displayPosition: i == 0 || i == 11 ? 'GK' : 'CM',
+          primaryPosition: i == 0 || i == 11 ? 'GK' : 'CM',
+          allPositions: 'CM',
+          pace: 75,
+          shooting: 75,
+          passing: 75,
+          dribbling: 75,
+          defending: 75,
+          physicality: 75,
+          isGoalkeeper: i == 0 || i == 11,
+        ),
+      );
+
+      final activeEvents = [
+        SquadEvent(
+          id: 'ev_starter',
+          playerName: 'Player 5', // In Starting XI
+          type: SquadEventType.suspension,
+          title: 'Yellow Card Suspension',
+          description: 'Accumulated 5 cards.',
+          durationGameweeks: 1,
+          remainingGameweeks: 1,
+          startGameweek: 1,
+          startSeason: 1,
+          date: DateTime.now(),
+        ),
+      ];
+
+      final rotatedSquad = SquadEventService.autoReplaceUnavailableStarters(
+        squad: mockSquad,
+        activeEvents: activeEvents,
+      );
+
+      // Index 5 should now be an available bench outfield player
+      expect(rotatedSquad[5].name, isNot(equals('Player 5')));
+      // Player 5 should now be on the bench
+      final benchNames = rotatedSquad.skip(11).map((p) => p.name).toList();
+      expect(benchNames, contains('Player 5'));
+
+      // Ineligible starters check on the rotated squad should now return empty!
+      final remainingIneligible = SquadEventService.getIneligibleStarters(
+        squad: rotatedSquad,
+        activeEvents: activeEvents,
+      );
+      expect(remainingIneligible, isEmpty);
     });
   });
 }
