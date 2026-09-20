@@ -37,6 +37,7 @@ class LeagueDefinition {
   final String divisionTitle;
   final List<String> clubs;
   final Map<String, String> clubCodes;
+  final int uclSpots;
 
   const LeagueDefinition({
     required this.id,
@@ -45,38 +46,120 @@ class LeagueDefinition {
     required this.divisionTitle,
     required this.clubs,
     required this.clubCodes,
+    this.uclSpots = 4,
   });
 }
 
-const List<LeagueDefinition> kAvailableLeagues = [
+const LeagueDefinition kPremierLeagueDefinition = LeagueDefinition(
+  id: 'premier_league',
+  name: 'Premier League',
+  country: 'England',
+  divisionTitle: 'England First Division',
+  uclSpots: 4,
+  clubs: [
+    'Arsenal', 'Aston Villa', 'AFC Bournemouth', 'Brentford',
+    'Brighton & Hove Albion', 'Chelsea', 'Crystal Palace', 'Everton',
+    'Fulham', 'Ipswich Town', 'Leicester City', 'Liverpool',
+    'Manchester City', 'Manchester United', 'Newcastle United',
+    'Nottingham Forest', 'Tottenham Hotspur', 'West Ham United',
+    'Wolverhampton Wanderers', 'Southampton'
+  ],
+  clubCodes: {
+    'Arsenal': 'ARS', 'Aston Villa': 'AVL', 'AFC Bournemouth': 'BOU',
+    'Brentford': 'BRE', 'Brighton & Hove Albion': 'BHA', 'Chelsea': 'CHE',
+    'Crystal Palace': 'CRY', 'Everton': 'EVE', 'Fulham': 'FUL',
+    'Ipswich Town': 'IPS', 'Leicester City': 'LEI', 'Liverpool': 'LIV',
+    'Manchester City': 'MCI', 'Manchester United': 'MUN', 'Newcastle United': 'NEW',
+    'Nottingham Forest': 'NFO', 'Tottenham Hotspur': 'TOT', 'West Ham United': 'WHU',
+    'Wolverhampton Wanderers': 'WOL', 'Southampton': 'SOU'
+  },
+);
+
+/// The Big 5 European Leagues that feed into the UEFA Champions League
+const List<LeagueDefinition> kSimulatedEuropeanLeagues = [
+  kPremierLeagueDefinition,
   LeagueDefinition(
-    id: 'premier_league',
-    name: 'Premier League',
-    country: 'England',
-    divisionTitle: 'England First Division',
+    id: 'la_liga',
+    name: 'La Liga',
+    country: 'Spain',
+    divisionTitle: 'Spain First Division',
+    uclSpots: 4,
     clubs: [
-      'Arsenal', 'Aston Villa', 'AFC Bournemouth', 'Brentford',
-      'Brighton & Hove Albion', 'Chelsea', 'Crystal Palace', 'Everton',
-      'Fulham', 'Ipswich Town', 'Leicester City', 'Liverpool',
-      'Manchester City', 'Manchester United', 'Newcastle United',
-      'Nottingham Forest', 'Tottenham Hotspur', 'West Ham United',
-      'Wolverhampton Wanderers', 'Southampton'
+      'Real Madrid', 'Barcelona', 'Atlético Madrid', 'Athletic Bilbao',
+      'Sevilla', 'Valencia', 'Real Sociedad', 'Real Betis',
+      'Villarreal', 'Girona'
     ],
     clubCodes: {
-      'Arsenal': 'ARS', 'Aston Villa': 'AVL', 'AFC Bournemouth': 'BOU',
-      'Brentford': 'BRE', 'Brighton & Hove Albion': 'BHA', 'Chelsea': 'CHE',
-      'Crystal Palace': 'CRY', 'Everton': 'EVE', 'Fulham': 'FUL',
-      'Ipswich Town': 'IPS', 'Leicester City': 'LEI', 'Liverpool': 'LIV',
-      'Manchester City': 'MCI', 'Manchester United': 'MUN', 'Newcastle United': 'NEW',
-      'Nottingham Forest': 'NFO', 'Tottenham Hotspur': 'TOT', 'West Ham United': 'WHU',
-      'Wolverhampton Wanderers': 'WOL', 'Southampton': 'SOU'
+      'Real Madrid': 'RMA', 'Barcelona': 'BAR', 'Atlético Madrid': 'ATM',
+      'Athletic Bilbao': 'ATH', 'Sevilla': 'SEV', 'Valencia': 'VAL',
+      'Real Sociedad': 'RSO', 'Real Betis': 'BET', 'Villarreal': 'VIL',
+      'Girona': 'GIR'
     },
   ),
+  LeagueDefinition(
+    id: 'serie_a',
+    name: 'Serie A',
+    country: 'Italy',
+    divisionTitle: 'Italy First Division',
+    uclSpots: 3,
+    clubs: [
+      'Inter Milan', 'AC Milan', 'Juventus', 'Napoli',
+      'Atalanta', 'AS Roma', 'Lazio', 'Fiorentina',
+      'Bologna', 'Torino'
+    ],
+    clubCodes: {
+      'Inter Milan': 'INT', 'AC Milan': 'MIL', 'Juventus': 'JUV',
+      'Napoli': 'NAP', 'Atalanta': 'ATA', 'AS Roma': 'ROM',
+      'Lazio': 'LAZ', 'Fiorentina': 'FIO', 'Bologna': 'BOL',
+      'Torino': 'TOR'
+    },
+  ),
+  LeagueDefinition(
+    id: 'bundesliga',
+    name: 'Bundesliga',
+    country: 'Germany',
+    divisionTitle: 'Germany First Division',
+    uclSpots: 3,
+    clubs: [
+      'Bayern Munich', 'Bayer Leverkusen', 'Borussia Dortmund', 'RB Leipzig',
+      'VfB Stuttgart', 'Eintracht Frankfurt', 'VfL Wolfsburg', 'Borussia Mönchengladbach',
+      'SC Freiburg', 'TSG Hoffenheim'
+    ],
+    clubCodes: {
+      'Bayern Munich': 'BAY', 'Bayer Leverkusen': 'B04', 'Borussia Dortmund': 'DOR',
+      'RB Leipzig': 'RBL', 'VfB Stuttgart': 'STU', 'Eintracht Frankfurt': 'SGE',
+      'VfL Wolfsburg': 'WOB', 'Borussia Mönchengladbach': 'BMG', 'SC Freiburg': 'FRE',
+      'TSG Hoffenheim': 'TSG'
+    },
+  ),
+  LeagueDefinition(
+    id: 'ligue_1',
+    name: 'Ligue 1',
+    country: 'France',
+    divisionTitle: 'France First Division',
+    uclSpots: 2,
+    clubs: [
+      'Paris Saint-Germain', 'Marseille', 'Monaco', 'Lyon',
+      'Lille', 'Nice', 'Rennes', 'Lens',
+      'Toulouse', 'Reims'
+    ],
+    clubCodes: {
+      'Paris Saint-Germain': 'PSG', 'Marseille': 'OM', 'Monaco': 'ASM',
+      'Lyon': 'OL', 'Lille': 'LOSC', 'Nice': 'OGCN',
+      'Rennes': 'SRFC', 'Lens': 'RCL', 'Toulouse': 'TLS',
+      'Reims': 'REI'
+    },
+  ),
+];
+
+const List<LeagueDefinition> kAvailableLeagues = [
+  kPremierLeagueDefinition,
   LeagueDefinition(
     id: 'continental_elite',
     name: 'Continental Elite',
     country: 'Europe',
     divisionTitle: 'European Champions League',
+    uclSpots: 4,
     clubs: [
       'Real Madrid', 'Manchester City', 'Bayern Munich', 'Paris Saint-Germain',
       'Liverpool', 'Barcelona', 'Arsenal', 'Inter Milan',
@@ -94,6 +177,7 @@ const List<LeagueDefinition> kAvailableLeagues = [
     name: 'Champions Invitational',
     country: 'Europe',
     divisionTitle: 'European Super Division',
+    uclSpots: 4,
     clubs: [
       'AC Milan', 'Atlético Madrid', 'Bayer Leverkusen', 'Chelsea',
       'Manchester United', 'Napoli', 'Sporting CP', 'Sevilla',
@@ -110,6 +194,7 @@ const List<LeagueDefinition> kAvailableLeagues = [
     name: 'English Championship',
     country: 'England',
     divisionTitle: 'England Second Division',
+    uclSpots: 0,
     clubs: [
       'Wolverhampton Wanderers', 'Crystal Palace', 'Fulham', 'AFC Bournemouth',
       'Nottingham Forest', 'Leeds United', 'Burnley', 'Brentford',
@@ -127,6 +212,7 @@ const List<LeagueDefinition> kAvailableLeagues = [
     name: 'European Heritage',
     country: 'Europe',
     divisionTitle: 'Continental Prestige League',
+    uclSpots: 2,
     clubs: [
       'Porto', 'PSV Eindhoven', 'Marseille', 'Monaco',
       'Celtic', 'Valencia', 'RB Leipzig', 'Leicester City',
@@ -140,6 +226,72 @@ const List<LeagueDefinition> kAvailableLeagues = [
     },
   ),
 ];
+
+/// Authentic club strength ratings for deterministic simulation across European leagues
+double getClubSimulatedRating(String clubName) {
+  final n = clubName.toLowerCase().trim();
+  if (n.contains('real madrid')) return 86.5;
+  if (n.contains('manchester city') || n == 'man city') return 86.0;
+  if (n.contains('bayern')) return 85.5;
+  if (n.contains('arsenal')) return 85.0;
+  if (n.contains('barcelona')) return 85.0;
+  if (n.contains('paris saint-germain') || n == 'psg') return 84.5;
+  if (n.contains('liverpool')) return 84.5;
+  if (n.contains('inter milan') || n == 'inter') return 84.5;
+  if (n.contains('leverkusen')) return 84.0;
+  if (n.contains('atlético') || n.contains('atletico')) return 83.5;
+  if (n.contains('dortmund')) return 83.0;
+  if (n.contains('juventus')) return 83.0;
+  if (n.contains('ac milan')) return 82.5;
+  if (n.contains('chelsea')) return 82.5;
+  if (n.contains('napoli')) return 82.0;
+  if (n.contains('aston villa')) return 81.5;
+  if (n.contains('newcastle')) return 81.5;
+  if (n.contains('tottenham')) return 81.5;
+  if (n.contains('manchester united') || n == 'man utd') return 81.5;
+  if (n.contains('leipzig')) return 81.0;
+  if (n.contains('atalanta')) return 80.5;
+  if (n.contains('roma')) return 80.5;
+  if (n.contains('athletic')) return 80.0;
+  if (n.contains('sociedad')) return 80.0;
+  if (n.contains('lazio')) return 80.0;
+  if (n.contains('stuttgart')) return 79.5;
+  if (n.contains('monaco')) return 79.5;
+  if (n.contains('marseille')) return 79.5;
+  if (n.contains('frankfurt')) return 79.0;
+  if (n.contains('lille')) return 79.0;
+  if (n.contains('lyon')) return 79.0;
+  if (n.contains('villarreal')) return 79.0;
+  if (n.contains('betis')) return 78.5;
+  if (n.contains('sevilla')) return 78.5;
+  if (n.contains('fiorentina')) return 78.5;
+  if (n.contains('brighton')) return 78.5;
+  if (n.contains('west ham')) return 78.0;
+  if (n.contains('bologna')) return 78.0;
+  if (n.contains('nice')) return 78.0;
+  if (n.contains('girona')) return 78.0;
+  if (n.contains('bournemouth')) return 77.5;
+  if (n.contains('crystal palace')) return 77.5;
+  if (n.contains('fulham')) return 77.5;
+  if (n.contains('lens')) return 77.5;
+  if (n.contains('rennes')) return 77.5;
+  if (n.contains('wolfsburg')) return 77.5;
+  if (n.contains('mönchengladbach') || n.contains('monchengladbach')) return 77.5;
+  if (n.contains('freiburg')) return 77.0;
+  if (n.contains('hoffenheim')) return 77.0;
+  if (n.contains('torino')) return 77.0;
+  if (n.contains('valencia')) return 77.0;
+  if (n.contains('brentford')) return 77.0;
+  if (n.contains('everton')) return 76.5;
+  if (n.contains('forest')) return 76.5;
+  if (n.contains('wolves')) return 76.5;
+  if (n.contains('sporting')) return 80.0;
+  if (n.contains('benfica')) return 80.0;
+  if (n.contains('porto')) return 79.5;
+  if (n.contains('ajax')) return 78.5;
+  if (n.contains('psv')) return 78.5;
+  return 76.0;
+}
 
 /// Authentic starting transfer war chest in £ millions based on club prestige & real-world financial scale (Issue #12).
 double getClubStartingBudget(String clubName) {
@@ -517,6 +669,58 @@ class CareerScreen extends ConsumerStatefulWidget {
     return '$startYr/$endYr';
   }
 
+  /// Evaluates table finishes across all European leagues to qualify top clubs for next season's UCL
+  /// based on authentic real-life UEFA qualification quotas:
+  /// - Premier League: Top 4 (#1–#4)
+  /// - La Liga: Top 4 (#1–#4)
+  /// - Serie A: Top 3 (#1–#3)
+  /// - Bundesliga: Top 3 (#1–#3)
+  /// - Ligue 1: Top 2 (#1–#2)
+  /// - Defending Champion Guarantee: Prior UCL winner is guaranteed qualification
+  static List<String> computeUclQualifiers({
+    required String activeLeagueId,
+    required List<TableEntry> activeLeagueTable,
+    required Map<String, List<TableEntry>> simulatedLeagueTables,
+    String? defendingChampion,
+    List<LeagueDefinition> leagues = kSimulatedEuropeanLeagues,
+  }) {
+    final qualified = <String>[];
+
+    for (final league in leagues) {
+      final List<TableEntry> table = (league.id == activeLeagueId)
+          ? activeLeagueTable
+          : (simulatedLeagueTables[league.id] ?? []);
+
+      final spots = league.uclSpots;
+      final topTeams = table.take(spots).map((t) => t.clubName).toList();
+      for (final team in topTeams) {
+        if (!qualified.contains(team) && qualified.length < 16) {
+          qualified.add(team);
+        }
+      }
+    }
+
+    // UEFA Titleholder Rule: Guarantee defending champion qualification
+    if (defendingChampion != null && defendingChampion.isNotEmpty && !qualified.contains(defendingChampion)) {
+      if (qualified.length >= 16) {
+        qualified.removeLast(); // Replace lowest qualification slot
+      }
+      qualified.insert(0, defendingChampion);
+    }
+
+    // Fallback if needed to guarantee exactly 16 teams
+    if (qualified.length < 16) {
+      for (final def in UclTournament.kDefaultUclClubs) {
+        if (!qualified.contains(def)) {
+          qualified.add(def);
+          if (qualified.length == 16) break;
+        }
+      }
+    }
+
+    return qualified;
+  }
+
   @override
   ConsumerState<CareerScreen> createState() => _CareerScreenState();
 }
@@ -567,6 +771,11 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
   // UCL Tournament Competition (Issue #3)
   UclTournament? _uclTournament;
   final List<MatchResult> _recentUclResults = [];
+
+  // Simulated European League Tables & Schedules for Dynamic UCL Qualification
+  final Map<String, List<TableEntry>> _simulatedLeagueTables = {};
+  final Map<String, List<List<ScheduledFixture>>> _simulatedLeagueSchedules = {};
+  String _selectedTableLeagueId = 'premier_league';
 
   // Domestic Cup Competitions: FA Cup & Carabao Cup (Fix 26 / User Fix 4)
   CupTournament? _faCupTournament;
@@ -1136,6 +1345,27 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
 
     // Generate balanced round-robin fixture calendar (Issue #12)
     _seasonSchedule = generateSeasonSchedule(_leagueClubs, totalGameweeks: _totalGameweeks);
+
+    // Restore Simulated European League Tables for Dynamic UCL Qualification
+    _simulatedLeagueTables.clear();
+    final savedSimTables = (saved['simulatedLeagueTables'] as Map<String, dynamic>?) ?? {};
+    savedSimTables.forEach((lId, tRaw) {
+      if (tRaw is List) {
+        final entries = <TableEntry>[];
+        for (final item in tRaw) {
+          try {
+            if (item is Map) {
+              entries.add(TableEntry.fromMap(Map<String, dynamic>.from(item)));
+            }
+          } catch (_) {}
+        }
+        if (entries.isNotEmpty) {
+          _simulatedLeagueTables[lId] = entries;
+        }
+      }
+    });
+    _ensureSimulatedLeagueTablesInitialized();
+    _selectedTableLeagueId = _leagueId;
 
     // Restore pending inbound transfer offers (Fix 28 / User Fix 6)
     _pendingTransferOffers.clear();
@@ -2047,6 +2277,11 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
 
     _seasonSchedule = generateSeasonSchedule(_leagueClubs, totalGameweeks: _totalGameweeks);
 
+    // Initialize Simulated European League Tables for Dynamic UCL Qualification
+    _simulatedLeagueTables.clear();
+    _ensureSimulatedLeagueTablesInitialized();
+    _selectedTableLeagueId = _leagueId;
+
     await _cacheLeagueClubSquads(db);
 
     await _persistCareerState();
@@ -2055,6 +2290,101 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       _isConfigured = true;
       _isLoading = false;
     });
+  }
+
+  /// Ensures that all European leagues feeding the UCL have initialized tables and schedules
+  void _ensureSimulatedLeagueTablesInitialized() {
+    for (final league in kSimulatedEuropeanLeagues) {
+      if (league.id == _leagueId) continue; // Active league uses _leagueTable
+      final existing = _simulatedLeagueTables[league.id];
+      if (existing == null || existing.isEmpty) {
+        _simulatedLeagueTables[league.id] = league.clubs.map((c) => TableEntry(clubName: c)).toList();
+      } else {
+        for (final c in league.clubs) {
+          if (!existing.any((t) => t.clubName == c)) {
+            existing.add(TableEntry(clubName: c));
+          }
+        }
+      }
+      final sched = _simulatedLeagueSchedules[league.id];
+      if (sched == null || sched.isEmpty || sched.length < _totalGameweeks) {
+        _simulatedLeagueSchedules[league.id] = generateSeasonSchedule(league.clubs, totalGameweeks: _totalGameweeks);
+      }
+    }
+  }
+
+  /// Simulates a matchday round across all European leagues feeding into the UCL
+  void _simulateOtherEuropeanLeagues() {
+    _ensureSimulatedLeagueTablesInitialized();
+    for (final league in kSimulatedEuropeanLeagues) {
+      if (league.id == _leagueId) continue; // Active league is simulated in primary matchday loop
+      final table = _simulatedLeagueTables[league.id];
+      final schedule = _simulatedLeagueSchedules[league.id];
+      if (table == null || schedule == null || schedule.isEmpty) continue;
+
+      final gwIdx = _currentGameweek - 1;
+      if (gwIdx < 0 || gwIdx >= schedule.length) continue;
+      final fixtures = schedule[gwIdx];
+
+      final rng = Random();
+      for (final fix in fixtures) {
+        final baseHome = getClubSimulatedRating(fix.homeClub);
+        final baseAway = getClubSimulatedRating(fix.awayClub);
+        // Form & matchday variance (+/- 2.0)
+        final homeRating = baseHome + (rng.nextDouble() * 4.0 - 2.0);
+        final awayRating = baseAway + (rng.nextDouble() * 4.0 - 2.0);
+
+        final res = _sim.simulateMatch(
+          homeClub: fix.homeClub,
+          homeRating: homeRating,
+          awayClub: fix.awayClub,
+          awayRating: awayRating,
+        );
+
+        final homeEntry = table.firstWhere(
+          (t) => t.clubName == fix.homeClub,
+          orElse: () {
+            final e = TableEntry(clubName: fix.homeClub);
+            table.add(e);
+            return e;
+          },
+        );
+        final awayEntry = table.firstWhere(
+          (t) => t.clubName == fix.awayClub,
+          orElse: () {
+            final e = TableEntry(clubName: fix.awayClub);
+            table.add(e);
+            return e;
+          },
+        );
+
+        homeEntry.recordResult(scored: res.homeGoals, conceded: res.awayGoals);
+        awayEntry.recordResult(scored: res.awayGoals, conceded: res.homeGoals);
+      }
+
+      table.sort((a, b) {
+        if (b.points != a.points) return b.points.compareTo(a.points);
+        if (b.goalDifference != a.goalDifference) return b.goalDifference.compareTo(a.goalDifference);
+        return b.goalsFor.compareTo(a.goalsFor);
+      });
+    }
+  }
+
+  /// Evaluates table finishes across all European leagues to qualify top clubs for next season's UCL
+  /// based on authentic real-life UEFA qualification quotas:
+  /// - Premier League: Top 4 (#1–#4)
+  /// - La Liga: Top 4 (#1–#4)
+  /// - Serie A: Top 3 (#1–#3)
+  /// - Bundesliga: Top 3 (#1–#3)
+  /// - Ligue 1: Top 2 (#1–#2)
+  /// - Defending Champion Guarantee: Prior UCL winner is guaranteed qualification
+  List<String> _computeNextSeasonUclQualifiers() {
+    return CareerScreen.computeUclQualifiers(
+      activeLeagueId: _leagueId,
+      activeLeagueTable: _leagueTable,
+      simulatedLeagueTables: _simulatedLeagueTables,
+      defendingChampion: _uclTournament?.champion,
+    );
   }
 
   void _promptNewCampaign() {
@@ -2584,6 +2914,9 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
       _recordMatchPlayerStats(match: userMatch, compKey: 'league');
     }
 
+    // Simulate concurrent European leagues that feed into the UEFA Champions League
+    _simulateOtherEuropeanLeagues();
+
     // Midweek UEFA Champions League Simulation (Issue #3 & Fix 24)
     final uclMd = UclTournament.getUclMatchdayForLeagueGw(_currentGameweek, totalGameweeks: _totalGameweeks);
     if (uclMd != null && _uclTournament != null) {
@@ -2994,6 +3327,10 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     });
 
     final tableList = _leagueTable.map((t) => t.toMap()).toList();
+    final simTablesMap = <String, List<Map<String, dynamic>>>{};
+    _simulatedLeagueTables.forEach((k, v) {
+      simTablesMap[k] = v.map((t) => t.toMap()).toList();
+    });
     final recentList = _recentResults.map((m) => m.toMap()).toList();
     final recentUclList = _recentUclResults.map((m) => m.toMap()).toList();
     final recentFaList = _recentFaCupResults.map((m) => m.toMap()).toList();
@@ -3064,6 +3401,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         'faCup': _careerFaCupTitles,
         'carabao': _careerCarabaoCupTitles,
       },
+      simulatedLeagueTables: simTablesMap,
     );
 
     final statePayload = <String, dynamic>{
@@ -3117,6 +3455,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         'faCup': _careerFaCupTitles,
         'carabao': _careerCarabaoCupTitles,
       },
+      'simulatedLeagueTables': simTablesMap,
     };
 
     // 2. Dual-layer persistence: SQLite touchline_save.db career_save table (Issue #10)
@@ -4577,7 +4916,29 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                     _careerPrizeMoneyEarned += totalSeasonPrize;
                     _winterBudgetAwarded = false;
                     _seasonSchedule = generateSeasonSchedule(_leagueClubs, totalGameweeks: _totalGameweeks);
-                    _uclTournament = UclTournament.create(userClub: _userClub);
+
+                    // Dynamic UEFA Champions League Qualification from simulated league tables
+                    final nextUclQualifiers = _computeNextSeasonUclQualifiers();
+                    _uclTournament = UclTournament.create(userClub: _userClub, qualifiedClubs: nextUclQualifiers);
+
+                    // Reset all simulated European league tables for the fresh campaign
+                    for (final entry in _simulatedLeagueTables.entries) {
+                      for (final t in entry.value) {
+                        t.played = 0;
+                        t.won = 0;
+                        t.drawn = 0;
+                        t.lost = 0;
+                        t.goalsFor = 0;
+                        t.goalsAgainst = 0;
+                        t.points = 0;
+                      }
+                    }
+                    // Refresh simulated European league schedules
+                    for (final l in kSimulatedEuropeanLeagues) {
+                      _simulatedLeagueSchedules[l.id] = generateSeasonSchedule(l.clubs, totalGameweeks: _totalGameweeks);
+                    }
+                    _selectedTableLeagueId = _leagueId;
+
                     final cupPool = List<String>.from(_leagueClubs);
                     for (final c in CupTournament.kDefaultEnglishCupClubs) {
                       if (!cupPool.contains(c)) cupPool.add(c);
@@ -7627,6 +7988,15 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
 
   /// Tab 3: Tables Hub — Full Standings, Team Stats, Scorers, Assists, Clean Sheets, UCL & Cups
   Widget _buildTablesTab(bool isDark, Color ink, Color inkMuted, LeagueDefinition activeLeague) {
+    final displayedLeague = kSimulatedEuropeanLeagues.firstWhere(
+      (l) => l.id == _selectedTableLeagueId,
+      orElse: () => activeLeague,
+    );
+    final displayedTable = (_selectedTableLeagueId == _leagueId)
+        ? _leagueTable
+        : (_simulatedLeagueTables[_selectedTableLeagueId] ?? []);
+    final uclSpots = displayedLeague.uclSpots;
+
     return SingleChildScrollView(
       padding: const EdgeInsets.all(16),
       physics: const BouncingScrollPhysics(),
@@ -7635,7 +8005,7 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
         children: [
           AlmanacCard(
             sectionTitle: _standingsTab == 0
-                ? '${activeLeague.divisionTitle.toUpperCase()} ${getSeasonYearLabel(_currentSeason)} STANDINGS'
+                ? '${displayedLeague.divisionTitle.toUpperCase()} ${getSeasonYearLabel(_currentSeason)} STANDINGS'
                 : _standingsTab == 1
                     ? 'LEAGUE TEAM STATS • OVERALL PERFORMANCE'
                     : _standingsTab == 2
@@ -7728,11 +8098,87 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                   ),
                 ),
 
-                if (_standingsTab == 0)
+                if (_standingsTab == 0) ...[
+                  // Horizontal League Switcher for Big 5 European Leagues
+                  Container(
+                    margin: const EdgeInsets.only(bottom: 12),
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      physics: const BouncingScrollPhysics(),
+                      child: Row(
+                        children: kSimulatedEuropeanLeagues.map((lDef) {
+                          final isSelected = _selectedTableLeagueId == lDef.id;
+                          final isUserLeague = lDef.id == _leagueId;
+                          String flagEmoji = '🇪🇺';
+                          if (lDef.id == 'premier_league') flagEmoji = '🏴󠁧󠁢󠁥󠁮󠁧󠁿';
+                          if (lDef.id == 'la_liga') flagEmoji = '🇪🇸';
+                          if (lDef.id == 'serie_a') flagEmoji = '🇮🇹';
+                          if (lDef.id == 'bundesliga') flagEmoji = '🇩🇪';
+                          if (lDef.id == 'ligue_1') flagEmoji = '🇫🇷';
+
+                          return Padding(
+                            padding: const EdgeInsets.only(right: 6),
+                            child: InkWell(
+                              onTap: () => setState(() => _selectedTableLeagueId = lDef.id),
+                              borderRadius: BorderRadius.circular(8),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: isSelected
+                                      ? (isDark ? AppPalette.darkAccent.withValues(alpha: 0.25) : AppPalette.darkAccent.withValues(alpha: 0.15))
+                                      : (isDark ? Colors.white.withValues(alpha: 0.04) : Colors.black.withValues(alpha: 0.04)),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: isSelected
+                                        ? AppPalette.darkAccent
+                                        : (isDark ? Colors.white10 : Colors.black12),
+                                    width: isSelected ? 1.5 : 1.0,
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(flagEmoji, style: const TextStyle(fontSize: 13)),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      lDef.name.toUpperCase(),
+                                      style: TextStyle(
+                                        fontFamily: AppTypography.fontFamily,
+                                        fontSize: 11,
+                                        fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                                        color: isSelected
+                                            ? (isDark ? Colors.white : AppPalette.darkAccent)
+                                            : inkMuted,
+                                      ),
+                                    ),
+                                    if (isUserLeague) ...[
+                                      const SizedBox(width: 5),
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                        decoration: BoxDecoration(
+                                          color: AppPalette.gold.withValues(alpha: 0.25),
+                                          borderRadius: BorderRadius.circular(4),
+                                        ),
+                                        child: const Text(
+                                          'ACTIVE',
+                                          style: TextStyle(fontSize: 8.5, fontWeight: FontWeight.w900, color: AppPalette.gold),
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        }).toList(),
+                      ),
+                    ),
+                  ),
+
                   Table(
                     columnWidths: const {
-                      0: FlexColumnWidth(0.6), // Pos
-                      1: FlexColumnWidth(3.0), // Club
+                      0: FlexColumnWidth(0.8), // Pos
+                      1: FlexColumnWidth(2.8), // Club
                       2: FlexColumnWidth(0.8), // P
                       3: FlexColumnWidth(0.8), // W
                       4: FlexColumnWidth(0.8), // D
@@ -7754,9 +8200,10 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                           _headerCell('PTS', inkMuted),
                         ],
                       ),
-                      ...List.generate(_leagueTable.length, (idx) {
-                        final t = _leagueTable[idx];
+                      ...List.generate(displayedTable.length, (idx) {
+                        final t = displayedTable[idx];
                         final isUser = t.clubName == _userClub;
+                        final isUclZone = idx < uclSpots;
                         final rowInk = isUser ? AppPalette.darkAccent : ink;
 
                         return TableRow(
@@ -7764,17 +8211,63 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                               ? BoxDecoration(color: AppPalette.darkAccent.withValues(alpha: 0.08))
                               : null,
                           children: [
-                            _cell('${idx + 1}', inkMuted),
+                            Center(
+                              child: isUclZone
+                                  ? Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF0052B4).withValues(alpha: 0.2),
+                                        borderRadius: BorderRadius.circular(4),
+                                        border: Border.all(color: const Color(0xFF0052B4).withValues(alpha: 0.6), width: 1),
+                                      ),
+                                      child: Text(
+                                        '${idx + 1}',
+                                        style: const TextStyle(
+                                          fontFamily: AppTypography.fontFamily,
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w800,
+                                          color: Color(0xFF4A90E2),
+                                        ),
+                                      ),
+                                    )
+                                  : Text(
+                                      '${idx + 1}',
+                                      style: TextStyle(
+                                        fontFamily: AppTypography.fontFamily,
+                                        fontSize: 11.5,
+                                        fontWeight: FontWeight.w500,
+                                        color: inkMuted,
+                                      ),
+                                    ),
+                            ),
                             Padding(
                               padding: const EdgeInsets.symmetric(vertical: 6),
-                              child: Text(
-                                t.clubName,
-                                style: TextStyle(
-                                  fontFamily: AppTypography.fontFamily,
-                                  fontSize: 12,
-                                  fontWeight: isUser ? FontWeight.w800 : FontWeight.w500,
-                                  color: rowInk,
-                                ),
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      t.clubName,
+                                      style: TextStyle(
+                                        fontFamily: AppTypography.fontFamily,
+                                        fontSize: 12,
+                                        fontWeight: isUser ? FontWeight.w800 : FontWeight.w500,
+                                        color: rowInk,
+                                      ),
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                                  if (isUser) ...[
+                                    const SizedBox(width: 4),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                                      decoration: BoxDecoration(
+                                        color: AppPalette.darkAccent.withValues(alpha: 0.2),
+                                        borderRadius: BorderRadius.circular(3),
+                                      ),
+                                      child: const Text('YOU', style: TextStyle(fontSize: 8.5, fontWeight: FontWeight.w900, color: AppPalette.darkAccent)),
+                                    ),
+                                  ],
+                                ],
                               ),
                             ),
                             _cell('${t.played}', inkMuted),
@@ -7787,7 +8280,86 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
                         );
                       }),
                     ],
-                  )
+                  ),
+
+                  // UEFA Champions League Qualification Zone Indicator
+                  Container(
+                    margin: const EdgeInsets.only(top: 12),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: isDark ? Colors.white.withValues(alpha: 0.04) : Colors.black.withValues(alpha: 0.03),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: const Color(0xFF0052B4).withValues(alpha: 0.35)),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF0052B4),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: const Text(
+                            'UCL',
+                            style: TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.w900),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'Positions 1–$uclSpots qualify for UEFA Champions League ${getSeasonYearLabel(_currentSeason + 1)} next season',
+                            style: TextStyle(
+                              fontFamily: AppTypography.fontFamily,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: isDark ? Colors.white70 : Colors.black87,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // Active League User Status Banner
+                  if (_selectedTableLeagueId == _leagueId) ...[
+                    Builder(builder: (context) {
+                      final userIdx = _leagueTable.indexWhere((t) => t.clubName == _userClub);
+                      if (userIdx == -1) return const SizedBox.shrink();
+                      final inUcl = userIdx < uclSpots;
+                      return Container(
+                        margin: const EdgeInsets.only(top: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+                        decoration: BoxDecoration(
+                          color: inUcl ? AppPalette.green.withValues(alpha: 0.12) : Colors.amber.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: inUcl ? AppPalette.green : Colors.amber, width: 1),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              inUcl ? Icons.check_circle_rounded : Icons.info_outline_rounded,
+                              size: 14,
+                              color: inUcl ? AppPalette.green : Colors.amber,
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                inUcl
+                                    ? '$_userClub currently in rank #${userIdx + 1} • On track to qualify for UEFA Champions League!'
+                                    : '$_userClub currently in rank #${userIdx + 1} • Finish in top $uclSpots or win UCL to qualify for next season!',
+                                style: TextStyle(
+                                  fontSize: 10.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: inUcl ? AppPalette.green : (isDark ? Colors.amber[300] : Colors.amber[900]),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
+                  ],
+                ]
                 else if (_standingsTab == 1)
                   _buildTeamStatsTable(isDark, ink, inkMuted, activeLeague)
                 else if (_standingsTab == 2)
@@ -8227,6 +8799,9 @@ class _CareerScreenState extends ConsumerState<CareerScreen> {
     if (club == _userClub) return _userClubCode;
     final code = activeLeague.clubCodes[club];
     if (code != null) return code;
+    for (final l in kSimulatedEuropeanLeagues) {
+      if (l.clubCodes.containsKey(club)) return l.clubCodes[club]!;
+    }
     for (final l in kAvailableLeagues) {
       if (l.clubCodes.containsKey(club)) return l.clubCodes[club]!;
     }

@@ -162,14 +162,33 @@ class UclTournament {
     'Aston Villa',
   ];
 
-  /// Initialize a new UCL campaign for the season, ensuring the user's club participates
-  factory UclTournament.create({required String userClub}) {
-    final clubs = List<String>.from(kDefaultUclClubs);
-    // If user's club is not in the default 16, include them (replace Aston Villa)
-    if (!clubs.contains(userClub)) {
-      clubs.removeLast();
-      clubs.add(userClub);
+  /// Initialize a new UCL campaign for the season.
+  /// If [qualifiedClubs] is provided, uses the dynamically qualified European clubs.
+  /// Otherwise, falls back to [kDefaultUclClubs] ensuring initial user participation.
+  factory UclTournament.create({required String userClub, List<String>? qualifiedClubs}) {
+    final clubsSet = <String>{};
+    if (qualifiedClubs != null && qualifiedClubs.isNotEmpty) {
+      for (final c in qualifiedClubs) {
+        if (c.trim().isNotEmpty) clubsSet.add(c.trim());
+        if (clubsSet.length == 16) break;
+      }
+    } else {
+      // Default initial campaign: include user club if not present
+      final defaults = List<String>.from(kDefaultUclClubs);
+      if (!defaults.contains(userClub)) {
+        defaults.removeLast();
+        defaults.add(userClub);
+      }
+      clubsSet.addAll(defaults);
     }
+    // Fallback if needed to guarantee exactly 16 teams
+    if (clubsSet.length < 16) {
+      for (final c in kDefaultUclClubs) {
+        clubsSet.add(c);
+        if (clubsSet.length == 16) break;
+      }
+    }
+    final clubs = clubsSet.toList();
 
     // Shuffle and distribute into 4 groups of 4
     final rng = Random();

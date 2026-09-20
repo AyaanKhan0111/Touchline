@@ -5301,6 +5301,271 @@ void main() {
         }
       }
     });
+
+    group('Dynamic UEFA Champions League Qualification & Multi-League Simulation', () {
+      test('kSimulatedEuropeanLeagues contains Big 5 leagues with authentic UEFA qualification quotas', () {
+        expect(kSimulatedEuropeanLeagues.length, 5);
+        final leagues = {for (final l in kSimulatedEuropeanLeagues) l.id: l};
+
+        expect(leagues.containsKey('premier_league'), isTrue);
+        expect(leagues.containsKey('la_liga'), isTrue);
+        expect(leagues.containsKey('serie_a'), isTrue);
+        expect(leagues.containsKey('bundesliga'), isTrue);
+        expect(leagues.containsKey('ligue_1'), isTrue);
+
+        // UEFA qualification spots: 4 ENG, 4 ESP, 3 ITA, 3 GER, 2 FRA = 16 spots
+        expect(leagues['premier_league']!.uclSpots, 4);
+        expect(leagues['la_liga']!.uclSpots, 4);
+        expect(leagues['serie_a']!.uclSpots, 3);
+        expect(leagues['bundesliga']!.uclSpots, 3);
+        expect(leagues['ligue_1']!.uclSpots, 2);
+
+        final totalSpots = kSimulatedEuropeanLeagues.fold<int>(0, (sum, l) => sum + l.uclSpots);
+        expect(totalSpots, 16, reason: 'Total European qualification quotas must sum to exactly 16 tournament slots');
+
+        for (final league in kSimulatedEuropeanLeagues) {
+          expect(league.clubs.isNotEmpty, isTrue);
+          expect(league.clubCodes.length, league.clubs.length);
+          for (final club in league.clubs) {
+            expect(league.clubCodes.containsKey(club), isTrue);
+            expect(league.clubCodes[club]!.length, inInclusiveRange(2, 4));
+          }
+        }
+      });
+
+      test('getClubSimulatedRating assigns realistic relative strength values', () {
+        expect(getClubSimulatedRating('Real Madrid'), greaterThanOrEqualTo(86.0));
+        expect(getClubSimulatedRating('Manchester City'), greaterThanOrEqualTo(85.5));
+        expect(getClubSimulatedRating('Bayern Munich'), greaterThanOrEqualTo(85.0));
+        expect(getClubSimulatedRating('Paris Saint-Germain'), greaterThanOrEqualTo(84.0));
+        expect(getClubSimulatedRating('Inter Milan'), greaterThanOrEqualTo(83.5));
+        expect(getClubSimulatedRating('Unknown Club FC'), 76.0);
+      });
+
+      test('CareerScreen.computeUclQualifiers correctly assigns 16 spots based on domestic league standings', () {
+        final plTable = [
+          TableEntry(clubName: 'Arsenal'),
+          TableEntry(clubName: 'Manchester City'),
+          TableEntry(clubName: 'Liverpool'),
+          TableEntry(clubName: 'Chelsea'),
+          TableEntry(clubName: 'Tottenham Hotspur'),
+          TableEntry(clubName: 'Manchester United'),
+        ];
+
+        final laLigaTable = [
+          TableEntry(clubName: 'Real Madrid'),
+          TableEntry(clubName: 'Barcelona'),
+          TableEntry(clubName: 'Atlético Madrid'),
+          TableEntry(clubName: 'Athletic Club'),
+          TableEntry(clubName: 'Villarreal'),
+        ];
+
+        final serieATable = [
+          TableEntry(clubName: 'Inter Milan'),
+          TableEntry(clubName: 'Juventus'),
+          TableEntry(clubName: 'AC Milan'),
+          TableEntry(clubName: 'Napoli'),
+        ];
+
+        final bundesligaTable = [
+          TableEntry(clubName: 'Bayern Munich'),
+          TableEntry(clubName: 'Bayer Leverkusen'),
+          TableEntry(clubName: 'Borussia Dortmund'),
+          TableEntry(clubName: 'RB Leipzig'),
+        ];
+
+        final ligue1Table = [
+          TableEntry(clubName: 'Paris Saint-Germain'),
+          TableEntry(clubName: 'Monaco'),
+          TableEntry(clubName: 'Marseille'),
+        ];
+
+        final simulatedTables = {
+          'la_liga': laLigaTable,
+          'serie_a': serieATable,
+          'bundesliga': bundesligaTable,
+          'ligue_1': ligue1Table,
+        };
+
+        final qualifiers = CareerScreen.computeUclQualifiers(
+          activeLeagueId: 'premier_league',
+          activeLeagueTable: plTable,
+          simulatedLeagueTables: simulatedTables,
+        );
+
+        expect(qualifiers.length, 16);
+        // 4 from PL
+        expect(qualifiers.sublist(0, 4), ['Arsenal', 'Manchester City', 'Liverpool', 'Chelsea']);
+        // 4 from La Liga
+        expect(qualifiers.sublist(4, 8), ['Real Madrid', 'Barcelona', 'Atlético Madrid', 'Athletic Club']);
+        // 3 from Serie A
+        expect(qualifiers.sublist(8, 11), ['Inter Milan', 'Juventus', 'AC Milan']);
+        // 3 from Bundesliga
+        expect(qualifiers.sublist(11, 14), ['Bayern Munich', 'Bayer Leverkusen', 'Borussia Dortmund']);
+        // 2 from Ligue 1
+        expect(qualifiers.sublist(14, 16), ['Paris Saint-Germain', 'Monaco']);
+      });
+
+      test('CareerScreen.computeUclQualifiers guarantees defending champion qualification even if finished outside top 4', () {
+        final plTable = [
+          TableEntry(clubName: 'Arsenal'),
+          TableEntry(clubName: 'Manchester City'),
+          TableEntry(clubName: 'Liverpool'),
+          TableEntry(clubName: 'Aston Villa'),
+          TableEntry(clubName: 'Tottenham Hotspur'),
+          TableEntry(clubName: 'Chelsea'),
+        ];
+
+        final laLigaTable = [
+          TableEntry(clubName: 'Real Madrid'),
+          TableEntry(clubName: 'Barcelona'),
+          TableEntry(clubName: 'Atlético Madrid'),
+          TableEntry(clubName: 'Athletic Club'),
+        ];
+
+        final serieATable = [
+          TableEntry(clubName: 'Inter Milan'),
+          TableEntry(clubName: 'Juventus'),
+          TableEntry(clubName: 'AC Milan'),
+        ];
+
+        final bundesligaTable = [
+          TableEntry(clubName: 'Bayern Munich'),
+          TableEntry(clubName: 'Bayer Leverkusen'),
+          TableEntry(clubName: 'Borussia Dortmund'),
+        ];
+
+        final ligue1Table = [
+          TableEntry(clubName: 'Paris Saint-Germain'),
+          TableEntry(clubName: 'Monaco'),
+        ];
+
+        final simulatedTables = {
+          'la_liga': laLigaTable,
+          'serie_a': serieATable,
+          'bundesliga': bundesligaTable,
+          'ligue_1': ligue1Table,
+        };
+
+        // Chelsea won UCL but finished 6th domestically
+        final qualifiers = CareerScreen.computeUclQualifiers(
+          activeLeagueId: 'premier_league',
+          activeLeagueTable: plTable,
+          simulatedLeagueTables: simulatedTables,
+          defendingChampion: 'Chelsea',
+        );
+
+        expect(qualifiers.length, 16);
+        expect(qualifiers.first, 'Chelsea', reason: 'Defending champion must receive top seed qualification');
+        expect(qualifiers.toSet().length, 16, reason: 'All 16 teams must be unique');
+        expect(qualifiers.contains('Chelsea'), isTrue);
+      });
+
+      test('CareerScreen.computeUclQualifiers does not duplicate defending champion if already qualified', () {
+        final plTable = [
+          TableEntry(clubName: 'Arsenal'),
+          TableEntry(clubName: 'Manchester City'),
+          TableEntry(clubName: 'Liverpool'),
+          TableEntry(clubName: 'Chelsea'),
+        ];
+
+        final simulatedTables = {
+          'la_liga': [
+            TableEntry(clubName: 'Real Madrid'),
+            TableEntry(clubName: 'Barcelona'),
+            TableEntry(clubName: 'Atlético Madrid'),
+            TableEntry(clubName: 'Athletic Club'),
+          ],
+          'serie_a': [
+            TableEntry(clubName: 'Inter Milan'),
+            TableEntry(clubName: 'Juventus'),
+            TableEntry(clubName: 'AC Milan'),
+          ],
+          'bundesliga': [
+            TableEntry(clubName: 'Bayern Munich'),
+            TableEntry(clubName: 'Bayer Leverkusen'),
+            TableEntry(clubName: 'Borussia Dortmund'),
+          ],
+          'ligue_1': [
+            TableEntry(clubName: 'Paris Saint-Germain'),
+            TableEntry(clubName: 'Monaco'),
+          ],
+        };
+
+        // Real Madrid won UCL and finished 1st in La Liga
+        final qualifiers = CareerScreen.computeUclQualifiers(
+          activeLeagueId: 'premier_league',
+          activeLeagueTable: plTable,
+          simulatedLeagueTables: simulatedTables,
+          defendingChampion: 'Real Madrid',
+        );
+
+        expect(qualifiers.length, 16);
+        expect(qualifiers.toSet().length, 16, reason: 'No duplicates allowed');
+        expect(qualifiers.where((c) => c == 'Real Madrid').length, 1);
+      });
+
+      test('UclTournament.create initializes groups with dynamically qualified clubs', () {
+        final dynamicQualifiers = [
+          'Arsenal', 'Manchester City', 'Liverpool', 'Chelsea',
+          'Real Madrid', 'Barcelona', 'Atlético Madrid', 'Athletic Club',
+          'Inter Milan', 'Juventus', 'AC Milan',
+          'Bayern Munich', 'Bayer Leverkusen', 'Borussia Dortmund',
+          'Paris Saint-Germain', 'Monaco',
+        ];
+
+        final tournament = UclTournament.create(
+          userClub: 'Arsenal',
+          qualifiedClubs: dynamicQualifiers,
+        );
+
+        expect(tournament.groups.length, 4);
+        final allGroupClubs = tournament.groups.values.expand((clubs) => clubs).toList();
+        expect(allGroupClubs.length, 16);
+        expect(allGroupClubs.toSet().length, 16);
+        expect(allGroupClubs.contains('Arsenal'), isTrue);
+        expect(allGroupClubs.contains('Monaco'), isTrue);
+        expect(allGroupClubs.contains('Real Madrid'), isTrue);
+      });
+
+      test('PrefsService saves and restores simulatedLeagueTables correctly', () async {
+        SharedPreferences.setMockInitialValues({});
+        final prefs = PrefsService.instance;
+
+        final mockSimulatedTables = {
+          'la_liga': [
+            {'clubName': 'Real Madrid', 'played': 38, 'won': 28, 'drawn': 6, 'lost': 4, 'goalsFor': 85, 'goalsAgainst': 28, 'points': 90},
+            {'clubName': 'Barcelona', 'played': 38, 'won': 27, 'drawn': 5, 'lost': 6, 'goalsFor': 82, 'goalsAgainst': 34, 'points': 86},
+          ],
+          'serie_a': [
+            {'clubName': 'Inter Milan', 'played': 38, 'won': 29, 'drawn': 5, 'lost': 4, 'goalsFor': 89, 'goalsAgainst': 22, 'points': 92},
+          ],
+        };
+
+        await prefs.saveCareerConfig(
+          leagueId: 'premier_league',
+          clubName: 'Arsenal',
+          clubCode: 'ARS',
+          isCustomClub: false,
+          squadMode: 'current',
+          simulatedLeagueTables: mockSimulatedTables,
+        );
+
+        final config = await prefs.getCareerConfig();
+        expect(config, isNotNull);
+        final restored = config!['simulatedLeagueTables'] as Map<String, List<Map<String, dynamic>>>;
+        expect(restored.containsKey('la_liga'), isTrue);
+        expect(restored['la_liga']!.length, 2);
+        expect(restored['la_liga']![0]['clubName'], 'Real Madrid');
+        expect(restored['la_liga']![0]['points'], 90);
+        expect(restored['serie_a']![0]['clubName'], 'Inter Milan');
+
+        // Verify clearCareerConfig clears simulatedLeagueTables
+        await prefs.clearCareerConfig();
+        final clearedConfig = await prefs.getCareerConfig();
+        expect(clearedConfig, isNull);
+      });
+    });
   });
 }
 

@@ -144,6 +144,7 @@ class PrefsService {
   static const _keyCareerPlayerActiveClubs = 'career_player_active_clubs';
   static const _keyCareerAiTransferHistory = 'career_ai_transfer_history';
   static const _keyCareerTrophies = 'career_trophies';
+  static const _keyCareerSimulatedLeagueTables = 'career_simulated_league_tables';
 
   Future<Map<String, dynamic>?> getCareerConfig() async {
     final p = await prefs;
@@ -404,6 +405,18 @@ class PrefsService {
       } catch (_) {}
     }
 
+    final simTablesRaw = p.getString(_keyCareerSimulatedLeagueTables);
+    Map<String, List<Map<String, dynamic>>> simulatedLeagueTables = {};
+    if (simTablesRaw != null) {
+      try {
+        final decoded = jsonDecode(simTablesRaw) as Map<String, dynamic>;
+        simulatedLeagueTables = decoded.map((k, v) {
+          final list = (v as List<dynamic>).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+          return MapEntry(k, list);
+        });
+      } catch (_) {}
+    }
+
     return {
       'leagueId': p.getString(_keyCareerLeagueId) ?? 'premier_league',
       'clubName': clubName,
@@ -445,6 +458,7 @@ class PrefsService {
       'playerActiveClubs': playerActiveClubs,
       'aiTransferHistory': aiTransferHistory,
       'careerTrophies': careerTrophies,
+      'simulatedLeagueTables': simulatedLeagueTables,
     };
   }
 
@@ -489,6 +503,7 @@ class PrefsService {
     Map<String, String>? playerActiveClubs,
     List<Map<String, dynamic>>? aiTransferHistory,
     Map<String, int>? careerTrophies,
+    Map<String, List<Map<String, dynamic>>>? simulatedLeagueTables,
   }) async {
     final p = await prefs;
     await p.setString(_keyCareerLeagueId, leagueId);
@@ -590,6 +605,9 @@ class PrefsService {
     if (careerTrophies != null) {
       await p.setString(_keyCareerTrophies, jsonEncode(careerTrophies));
     }
+    if (simulatedLeagueTables != null) {
+      await p.setString(_keyCareerSimulatedLeagueTables, jsonEncode(simulatedLeagueTables));
+    }
   }
 
   Future<void> clearCareerConfig() async {
@@ -636,5 +654,6 @@ class PrefsService {
     await p.remove(_keyCareerPlayerActiveClubs);
     await p.remove(_keyCareerAiTransferHistory);
     await p.remove(_keyCareerTrophies);
+    await p.remove(_keyCareerSimulatedLeagueTables);
   }
 }
